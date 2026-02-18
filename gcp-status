@@ -29,8 +29,11 @@ list_profiles() {
   base_dir="$(gcp_base_dir)"
   local active_profile
   active_profile="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -a profiles=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -A profile_accounts=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -A profile_projects=()
 
   echo "GCP profile base: $base_dir"

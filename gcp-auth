@@ -49,8 +49,11 @@ list_profiles() {
   base_dir="$(gcp_base_dir)"
   local active_profile
   active_profile="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -a profiles=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -A profile_accounts=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
   declare -A profile_projects=()
 
   echo "GCP profile base: $base_dir"
@@ -154,9 +157,13 @@ if [[ -z "$PROFILE_SELECTOR" ]]; then
 fi
 
 BASE_DIR="$(gcp_base_dir)"
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_resolve_profile_selector
 declare -a PROFILES=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles
 declare -A PROFILE_ACCOUNTS=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles
 declare -A PROFILE_PROJECTS=()
+# shellcheck disable=SC2034  # output holder used via nameref by gcp_resolve_profile_selector
 RESOLVED_INDEX=""
 PROFILE="$PROFILE_SELECTOR"
 

@@ -29,8 +29,11 @@ USAGE
 }
 
 BASE_DIR="$(gcp_base_dir)"
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
 declare -a profiles=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
 declare -A profile_accounts=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
 declare -A profile_projects=()
 ASSUME_YES=0
 

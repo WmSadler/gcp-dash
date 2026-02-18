@@ -161,6 +161,18 @@ GitHub Actions CI runs:
 - bash syntax checks
 - smoke tests
 
+## CI/CD Sync
+
+On every push to `main` (including merged PRs), CI runs tests first. If tests are green, the workflow syncs `main` to:
+
+- `origin/main`
+- `public/main` (mirror remote)
+
+Mirror configuration:
+
+- Required secret: `PUBLIC_MIRROR_SSH_KEY` (SSH private key that can push to the mirror repo)
+- Optional repository variable: `PUBLIC_MIRROR_URL` (defaults to `git@github.com:WmSadler/gcp-dash.git`)
+
 ## License
 
 MIT. See `LICENSE`.
