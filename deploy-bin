@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<USAGE
+Usage:
+  ./deploy-bin [-b|--bin-dir <path>] [-h|--help]
+
+Description:
+  Installs helper scripts into a user bin directory (default: ~/bin).
+  Existing files are overwritten.
+
+Options:
+  -b, --bin-dir <path>  Target bin directory (default: \$HOME/bin)
+  -h, --help        Show this help message
+USAGE
+}
+
+BIN_DIR="${HOME}/bin"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--bin-dir)
+      BIN_DIR="${2:-}"
+      if [[ -z "$BIN_DIR" ]]; then
+        echo "Error: -b|--bin-dir requires a path." >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FILES=(gcp- gcp-auth gcp-status gcp-ls gcp-cp-profile gcp-nc gcp-rm-profile gpu-status gcp-common)
+
+mkdir -p "$BIN_DIR"
+
+for name in "${FILES[@]}"; do
+  src="${SCRIPT_DIR}/${name}"
+  dst="${BIN_DIR}/${name}"
+  mode="0755"
+  if [[ "$name" == "gcp-common" ]]; then
+    mode="0644"
+  fi
+  if [[ ! -f "$src" ]]; then
+    echo "Error: missing source file: $src" >&2
+    exit 1
+  fi
+  install -m "$mode" "$src" "$dst"
+  echo "Installed: $dst"
+done
+
+cat <<DONE
+
+Deployment complete.
+
+If needed, add to your shell profile:
+  export PATH="\$HOME/bin:\$PATH"
+
+Then reload your shell and run:
+  gcp-status --help
+DONE

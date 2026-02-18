@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  source gcp-auth [-y|--yes] <profile> [project_id] [account_email]
+  source gcp-auth -l|--list-profiles
+  source gcp-auth -h|--help
+
+Examples:
+  source gcp-auth c1-stage c1-stage-project admin-c1@company1.com
+  source gcp-auth c2-prod  c2-prod-project  admin-c2@company2.com
+  source gcp-auth c1-stage
+
+Notes:
+  - This script is intended to be sourced by the current shell.
+  - Use 'source' so CLOUDSDK_CONFIG/PROJECT vars are applied to the current shell.
+  - Creates isolated gcloud config + ADC per profile under \$GCP_CFG_BASE/<profile>
+  - Default GCP_CFG_BASE is ~/.config/gcloud-codex
+  - Useful for pinning a VS Code terminal (and Codex) to one GCP profile/project.
+  - Scope: human user auth context only; no service account impersonation helpers.
+USAGE
+  echo
+  echo "Other GCP commands:"
+  gcp_print_command_catalog "gcp-auth"
+}
+
+list_profiles() {
+  local base_dir
+  base_dir="$(gcp_base_dir)"
+  local active_profile
+  active_profile="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+  declare -a profiles=()
+  declare -A profile_accounts=()
+  declare -A profile_projects=()
+
+  echo "GCP profile base: $base_dir"
+  gcp_collect_profiles "$base_dir" profiles profile_accounts profile_projects
+
+  if [[ "${#profiles[@]}" -eq 0 ]]; then
+    echo "(no profiles found)"
+    return 0
+  fi
+
+  gcp_print_profiles_numbered profiles profile_accounts profile_projects "$active_profile"
+}
+
+confirm_change() {
+  local prompt="$1"
+  local reply
+  if [[ ! -t 0 ]]; then
+    echo "Error: profile update needs interactive confirmation." >&2
+    return 1
+  fi
+  read -r -p "$prompt [y/N]: " reply
+  [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
+ASSUME_YES=0
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    -h|--help)
+      usage
+      return 0 2>/dev/null || exit 0
+      ;;
+    -l|--list-profiles)
+      list_profiles
+      return 0 2>/dev/null || exit 0
+      ;;
+    -y|--yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Error: unknown option: $1" >&2
+      usage
+      return 2 2>/dev/null || exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "Error: gcloud not found in PATH." >&2
+  return 127 2>/dev/null || exit 127
+fi
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  echo "Warning: gcp-auth is designed to be sourced (run: source gcp-auth ...)." >&2
+fi
+
+PROFILE="${1:-}"
+PROJECT_ID="${2:-}"
+ACCOUNT_EMAIL="${3:-}"
+
+if [[ -z "$PROFILE" ]]; then
+  usage
+  return 2 2>/dev/null || exit 2
+fi
+
+if ! gcp_validate_new_profile_name "$PROFILE"; then
+  echo "Error: invalid profile name '$PROFILE'." >&2
+  return 2 2>/dev/null || exit 2
+fi
+
+# Isolated gcloud config dir (includes ADC storage)
+GCP_CFG_BASE="$(gcp_base_dir)"
+GCP_CFG_DIR="${GCP_CFG_BASE}/${PROFILE}"
+PROFILE_EXISTS=0
+if [[ -d "$GCP_CFG_DIR" ]]; then
+  PROFILE_EXISTS=1
+fi
+
+SAVED_PROJECT=""
+SAVED_ACCOUNT=""
+if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
+  SAVED_PROJECT="$(CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud config get-value project 2>/dev/null || true)"
+  SAVED_ACCOUNT="$(CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud config get-value account 2>/dev/null || true)"
+  [[ "$SAVED_PROJECT" == "(unset)" ]] && SAVED_PROJECT=""
+  [[ "$SAVED_ACCOUNT" == "(unset)" ]] && SAVED_ACCOUNT=""
+fi
+
+EFFECTIVE_PROJECT="$PROJECT_ID"
+EFFECTIVE_ACCOUNT="$ACCOUNT_EMAIL"
+RUN_LOGIN=1
+
+if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
+  if [[ -z "$EFFECTIVE_PROJECT" ]]; then
+    EFFECTIVE_PROJECT="$SAVED_PROJECT"
+  fi
+  if [[ -z "$EFFECTIVE_ACCOUNT" ]]; then
+    EFFECTIVE_ACCOUNT="$SAVED_ACCOUNT"
+  fi
+
+  RUN_LOGIN=0
+fi
+
+if [[ -z "$EFFECTIVE_PROJECT" ]]; then
+  echo "Error: profile '$PROFILE' has no saved project. Specify <project_id>." >&2
+  return 2 2>/dev/null || exit 2
+fi
+
+if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
+  NEED_CONFIRM=0
+  if [[ -n "$PROJECT_ID" && "$PROJECT_ID" != "$SAVED_PROJECT" ]]; then
+    NEED_CONFIRM=1
+  fi
+  if [[ -n "$ACCOUNT_EMAIL" && "$ACCOUNT_EMAIL" != "$SAVED_ACCOUNT" ]]; then
+    NEED_CONFIRM=1
+  fi
+
+  if [[ "$NEED_CONFIRM" -eq 1 ]]; then
+    echo "Profile '$PROFILE' already exists."
+    echo "  Saved project: ${SAVED_PROJECT:-<unset>}"
+    echo "  Saved account: ${SAVED_ACCOUNT:-<unset>}"
+    echo "  New project  : ${EFFECTIVE_PROJECT:-<unset>}"
+    echo "  New account  : ${EFFECTIVE_ACCOUNT:-<unset>}"
+    if [[ "$ASSUME_YES" -ne 1 ]]; then
+      if ! confirm_change "Update this profile"; then
+        echo "Aborted: profile unchanged."
+        return 1 2>/dev/null || exit 1
+      fi
+    fi
+    RUN_LOGIN=1
+  fi
+fi
+
+# Export per-shell variables (only sticks if sourced)
+export GCP_CFG_BASE="$GCP_CFG_BASE"
+export CLOUDSDK_CONFIG="$GCP_CFG_DIR"
+export GOOGLE_CLOUD_PROJECT="$EFFECTIVE_PROJECT"
+export GCLOUD_PROJECT="$EFFECTIVE_PROJECT"
+export CLOUDSDK_CORE_PROJECT="$EFFECTIVE_PROJECT"
+
+echo "==> Using profile: $PROFILE"
+echo "==> CLOUDSDK_CONFIG=$CLOUDSDK_CONFIG"
+echo "==> Project: $EFFECTIVE_PROJECT"
+if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+  echo "==> Preferred account: $EFFECTIVE_ACCOUNT"
+fi
+echo
+
+if [[ "$RUN_LOGIN" -eq 0 ]]; then
+  echo "==> Switched to existing profile. Re-auth skipped."
+  echo "==> Run: gcp-status"
+  return 0 2>/dev/null || exit 0
+fi
+
+if [[ ! -t 0 && "$ASSUME_YES" -ne 1 ]]; then
+  echo "Error: non-interactive mutation requires -y|--yes." >&2
+  return 2 2>/dev/null || exit 2
+fi
+
+run_auth_mutation() {
+  umask 077
+  mkdir -p "$GCP_CFG_BASE" "$GCP_CFG_DIR"
+  chmod 700 "$GCP_CFG_BASE" "$GCP_CFG_DIR" 2>/dev/null || true
+
+  # Set project in this config (safe to run repeatedly)
+  gcloud --quiet config set project "$EFFECTIVE_PROJECT" >/dev/null
+
+  # If an account was provided, try to set it (doesn't authenticate by itself)
+  if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+    gcloud --quiet config set account "$EFFECTIVE_ACCOUNT" >/dev/null || true
+  fi
+
+  echo "==> Step 1/2: gcloud auth login (user creds for gcloud CLI)"
+  # --brief reduces prompts; if it fails (older gcloud), fall back.
+  gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --brief 2>/dev/null \
+    || gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"}
+
+  echo
+  echo "==> Step 2/2: gcloud auth application-default login (ADC for SDKs/Terraform/libs)"
+  gcloud auth application-default login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --quiet
+}
+
+if ! gcp_run_with_lock "$GCP_CFG_BASE" run_auth_mutation; then
+  return 1 2>/dev/null || exit 1
+fi
+
+echo
+echo "==> Done. Current terminal is now pinned (if you sourced this)."
+echo "==> Run: gcp-status"
