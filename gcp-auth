@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+
+# Avoid mutating shell options when sourced.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  set -euo pipefail
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./gcp-common
@@ -12,7 +16,7 @@ fi
 usage() {
   cat <<USAGE
 Usage:
-  source gcp-auth [-y|--yes] <profile> [project_id] [account_email]
+  source gcp-auth [-y|--yes] <profile_number_or_name> [project_id] [account_email]
   source gcp-auth -l|--list-profiles
   source gcp-auth -h|--help
 
@@ -20,6 +24,7 @@ Examples:
   source gcp-auth c1-stage c1-stage-project admin-c1@company1.com
   source gcp-auth c2-prod  c2-prod-project  admin-c2@company2.com
   source gcp-auth c1-stage
+  source gcp-auth 2
 
 Notes:
   - This script is intended to be sourced by the current shell.
@@ -70,6 +75,37 @@ confirm_change() {
   [[ "$reply" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+looks_like_email() {
+  local value="$1"
+  [[ "$value" == *"@"* && "$value" == *.* ]]
+}
+
+looks_like_project_id() {
+  local value="$1"
+  [[ "$value" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]
+}
+
+normalize_project_and_account_args() {
+  # Common typo: second positional is account email (project omitted).
+  if [[ -n "$PROJECT_ID" && -z "$ACCOUNT_EMAIL" ]] && looks_like_email "$PROJECT_ID"; then
+    ACCOUNT_EMAIL="$PROJECT_ID"
+    PROJECT_ID=""
+    return
+  fi
+
+  # Recover from swapped args: project=email and account=project-id.
+  if [[ -n "$PROJECT_ID" && -n "$ACCOUNT_EMAIL" ]] \
+    && looks_like_email "$PROJECT_ID" \
+    && ! looks_like_email "$ACCOUNT_EMAIL" \
+    && looks_like_project_id "$ACCOUNT_EMAIL"; then
+    local swapped_project="$ACCOUNT_EMAIL"
+    local swapped_account="$PROJECT_ID"
+    PROJECT_ID="$swapped_project"
+    ACCOUNT_EMAIL="$swapped_account"
+    echo "Warning: argument order looked swapped; using project='$PROJECT_ID' account='$ACCOUNT_EMAIL'." >&2
+  fi
+}
+
 ASSUME_YES=0
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
@@ -100,27 +136,47 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! command -v gcloud >/dev/null 2>&1; then
-  echo "Error: gcloud not found in PATH." >&2
-  return 127 2>/dev/null || exit 127
-fi
-
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   echo "Warning: gcp-auth is designed to be sourced (run: source gcp-auth ...)." >&2
 fi
 
-PROFILE="${1:-}"
+PROFILE_SELECTOR="${1:-}"
 PROJECT_ID="${2:-}"
 ACCOUNT_EMAIL="${3:-}"
 
-if [[ -z "$PROFILE" ]]; then
-  usage
+normalize_project_and_account_args
+
+if [[ -z "$PROFILE_SELECTOR" ]]; then
+  list_profiles
+  echo
+  echo "Run: source gcp-auth <profile_number_or_name> [project_id] [account_email]"
+  return 0 2>/dev/null || exit 0
+fi
+
+BASE_DIR="$(gcp_base_dir)"
+declare -a PROFILES=()
+declare -A PROFILE_ACCOUNTS=()
+declare -A PROFILE_PROJECTS=()
+RESOLVED_INDEX=""
+PROFILE="$PROFILE_SELECTOR"
+
+gcp_collect_profiles "$BASE_DIR" PROFILES PROFILE_ACCOUNTS PROFILE_PROJECTS
+if gcp_resolve_profile_selector PROFILES "$PROFILE_SELECTOR" PROFILE RESOLVED_INDEX; then
+  :
+elif [[ "$PROFILE_SELECTOR" =~ ^[0-9]+$ ]]; then
+  echo "Error: profile number '$PROFILE_SELECTOR' not found." >&2
+  list_profiles
   return 2 2>/dev/null || exit 2
 fi
 
 if ! gcp_validate_new_profile_name "$PROFILE"; then
   echo "Error: invalid profile name '$PROFILE'." >&2
   return 2 2>/dev/null || exit 2
+fi
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "Error: gcloud not found in PATH." >&2
+  return 127 2>/dev/null || exit 127
 fi
 
 # Isolated gcloud config dir (includes ADC storage)
@@ -142,7 +198,12 @@ fi
 
 EFFECTIVE_PROJECT="$PROJECT_ID"
 EFFECTIVE_ACCOUNT="$ACCOUNT_EMAIL"
-RUN_LOGIN=1
+PROJECT_CHANGED=1
+ACCOUNT_CHANGED=1
+RUN_PROFILE_MUTATION=1
+RUN_GCLOUD_LOGIN=0
+RUN_ADC_LOGIN=0
+RUN_ADC_QUOTA_SET=0
 
 if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
   if [[ -z "$EFFECTIVE_PROJECT" ]]; then
@@ -152,36 +213,56 @@ if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
     EFFECTIVE_ACCOUNT="$SAVED_ACCOUNT"
   fi
 
-  RUN_LOGIN=0
+  if [[ "$EFFECTIVE_PROJECT" == "$SAVED_PROJECT" ]]; then
+    PROJECT_CHANGED=0
+  fi
+  if [[ "$EFFECTIVE_ACCOUNT" == "$SAVED_ACCOUNT" ]]; then
+    ACCOUNT_CHANGED=0
+  fi
+  if [[ "$PROJECT_CHANGED" -eq 0 && "$ACCOUNT_CHANGED" -eq 0 ]]; then
+    RUN_PROFILE_MUTATION=0
+  fi
 fi
 
 if [[ -z "$EFFECTIVE_PROJECT" ]]; then
   echo "Error: profile '$PROFILE' has no saved project. Specify <project_id>." >&2
+  if [[ -n "$ACCOUNT_EMAIL" ]]; then
+    echo "Hint: argument order is: source gcp-auth <profile> <project_id> [account_email]" >&2
+  fi
   return 2 2>/dev/null || exit 2
 fi
 
-if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
-  NEED_CONFIRM=0
-  if [[ -n "$PROJECT_ID" && "$PROJECT_ID" != "$SAVED_PROJECT" ]]; then
-    NEED_CONFIRM=1
-  fi
-  if [[ -n "$ACCOUNT_EMAIL" && "$ACCOUNT_EMAIL" != "$SAVED_ACCOUNT" ]]; then
-    NEED_CONFIRM=1
-  fi
+if ! looks_like_project_id "$EFFECTIVE_PROJECT"; then
+  echo "Error: invalid project_id '$EFFECTIVE_PROJECT'." >&2
+  echo "Hint: use: source gcp-auth <profile> <project_id> [account_email]" >&2
+  return 2 2>/dev/null || exit 2
+fi
 
-  if [[ "$NEED_CONFIRM" -eq 1 ]]; then
-    echo "Profile '$PROFILE' already exists."
-    echo "  Saved project: ${SAVED_PROJECT:-<unset>}"
-    echo "  Saved account: ${SAVED_ACCOUNT:-<unset>}"
-    echo "  New project  : ${EFFECTIVE_PROJECT:-<unset>}"
-    echo "  New account  : ${EFFECTIVE_ACCOUNT:-<unset>}"
-    if [[ "$ASSUME_YES" -ne 1 ]]; then
-      if ! confirm_change "Update this profile"; then
-        echo "Aborted: profile unchanged."
-        return 1 2>/dev/null || exit 1
-      fi
+if [[ "$PROFILE_EXISTS" -eq 1 && "$RUN_PROFILE_MUTATION" -eq 1 ]]; then
+  echo "Profile '$PROFILE' already exists."
+  echo "  Saved project: ${SAVED_PROJECT:-<unset>}"
+  echo "  Saved account: ${SAVED_ACCOUNT:-<unset>}"
+  echo "  New project  : ${EFFECTIVE_PROJECT:-<unset>}"
+  echo "  New account  : ${EFFECTIVE_ACCOUNT:-<unset>}"
+  if [[ "$ASSUME_YES" -ne 1 ]]; then
+    if ! confirm_change "Update this profile"; then
+      echo "Aborted: profile unchanged."
+      return 1 2>/dev/null || exit 1
     fi
-    RUN_LOGIN=1
+  fi
+fi
+
+if [[ "$PROFILE_EXISTS" -eq 0 ]]; then
+  RUN_GCLOUD_LOGIN=1
+  RUN_ADC_LOGIN=1
+elif [[ "$ACCOUNT_CHANGED" -eq 1 ]]; then
+  RUN_GCLOUD_LOGIN=1
+  RUN_ADC_LOGIN=1
+elif [[ "$PROJECT_CHANGED" -eq 1 ]]; then
+  if [[ -f "${GCP_CFG_DIR}/application_default_credentials.json" ]]; then
+    RUN_ADC_QUOTA_SET=1
+  else
+    RUN_ADC_LOGIN=1
   fi
 fi
 
@@ -200,18 +281,21 @@ if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
 fi
 echo
 
-if [[ "$RUN_LOGIN" -eq 0 ]]; then
+if [[ "$RUN_PROFILE_MUTATION" -eq 0 ]]; then
   echo "==> Switched to existing profile. Re-auth skipped."
   echo "==> Run: gcp-status"
   return 0 2>/dev/null || exit 0
 fi
 
-if [[ ! -t 0 && "$ASSUME_YES" -ne 1 ]]; then
+if [[ ! -t 0 && "$ASSUME_YES" -ne 1 && ( "$RUN_GCLOUD_LOGIN" -eq 1 || "$RUN_ADC_LOGIN" -eq 1 ) ]]; then
   echo "Error: non-interactive mutation requires -y|--yes." >&2
   return 2 2>/dev/null || exit 2
 fi
 
 run_auth_mutation() {
+  local total_steps=0
+  local step=0
+
   umask 077
   mkdir -p "$GCP_CFG_BASE" "$GCP_CFG_DIR"
   chmod 700 "$GCP_CFG_BASE" "$GCP_CFG_DIR" 2>/dev/null || true
@@ -224,14 +308,27 @@ run_auth_mutation() {
     gcloud --quiet config set account "$EFFECTIVE_ACCOUNT" >/dev/null || true
   fi
 
-  echo "==> Step 1/2: gcloud auth login (user creds for gcloud CLI)"
-  # --brief reduces prompts; if it fails (older gcloud), fall back.
-  gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --brief 2>/dev/null \
-    || gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"}
+  total_steps=$((RUN_GCLOUD_LOGIN + RUN_ADC_LOGIN + RUN_ADC_QUOTA_SET))
 
-  echo
-  echo "==> Step 2/2: gcloud auth application-default login (ADC for SDKs/Terraform/libs)"
-  gcloud auth application-default login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --quiet
+  if [[ "$RUN_GCLOUD_LOGIN" -eq 1 ]]; then
+    step=$((step + 1))
+    echo "==> Step ${step}/${total_steps}: gcloud auth login (user creds for gcloud CLI)"
+    # --brief reduces prompts; if it fails (older gcloud), fall back.
+    gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --brief 2>/dev/null \
+      || gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"}
+  fi
+
+  if [[ "$RUN_ADC_LOGIN" -eq 1 ]]; then
+    step=$((step + 1))
+    echo
+    echo "==> Step ${step}/${total_steps}: gcloud auth application-default login (ADC for SDKs/Terraform/libs)"
+    gcloud auth application-default login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --quiet
+  elif [[ "$RUN_ADC_QUOTA_SET" -eq 1 ]]; then
+    step=$((step + 1))
+    echo
+    echo "==> Step ${step}/${total_steps}: gcloud auth application-default set-quota-project (ADC quota alignment)"
+    gcloud auth application-default set-quota-project "$EFFECTIVE_PROJECT" --quiet
+  fi
 }
 
 if ! gcp_run_with_lock "$GCP_CFG_BASE" run_auth_mutation; then

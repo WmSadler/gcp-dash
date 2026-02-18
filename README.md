@@ -62,6 +62,29 @@ Check current shell context:
 gcp-status
 ```
 
+## `gcp-auth` behavior
+
+Argument order:
+
+- `source gcp-auth <profile_number_or_name> [project_id] [account_email]`
+- If no args are provided, `gcp-auth` lists profiles and exits.
+- Selector can be profile name or list index (for example `source gcp-auth 3`).
+
+Input safety:
+
+- If the second argument looks like an email and no third argument is given, it is treated as `account_email` (not `project_id`).
+- If `project_id`/`account_email` look swapped, `gcp-auth` auto-corrects and prints a warning.
+- If effective project is missing or invalid, `gcp-auth` fails before auth/ADC login.
+
+Update flow for existing profiles:
+
+- No account/project change: switch only, no auth steps.
+- Project-only change:
+  - always updates `gcloud config set project`
+  - if ADC exists for that profile, runs `gcloud auth application-default set-quota-project`
+  - if ADC does not exist, runs `gcloud auth application-default login`
+- Account change (or new profile): runs full `gcloud auth login` + `gcloud auth application-default login`.
+
 ## Commands
 
 Run `gcp-` to see all GCP helper commands:
@@ -83,7 +106,7 @@ Included scripts:
 
 All profile-list output uses:
 
-- `n) name, account, project`
+- `*n) name, account, project` for active profile, otherwise ` n) name, account, project`
 
 Machine-readable list output:
 
@@ -130,7 +153,7 @@ Run lightweight smoke tests:
 ./tests/test-gcp-helpers.sh
 ```
 
-Tests cover list/json/copy/rename flows and expected non-interactive safety behavior for delete confirmation.
+Tests cover list/json/copy/rename flows, profile-selection behavior in `gcp-auth`, and non-interactive safety behavior.
 
 GitHub Actions CI runs:
 

@@ -75,16 +75,26 @@ gcp_print_profiles_numbered() {
   local -n _projects="$3"
   local active_profile="${4:-}"
   local i=0
+  local marker=" "
+  local number_width
   local profile
-  local profile_name
+
+  # Fall back to the shell-pinned profile when active_profile isn't passed.
+  if [[ -z "$active_profile" && -n "${CLOUDSDK_CONFIG:-}" ]]; then
+    active_profile="$(basename "$CLOUDSDK_CONFIG")"
+  fi
+
+  number_width="${#_profiles[@]}"
+  number_width="${#number_width}"
 
   for profile in "${_profiles[@]}"; do
     i=$((i + 1))
-    profile_name="$profile"
     if [[ -n "$active_profile" && "$profile" == "$active_profile" ]]; then
-      profile_name="${profile_name} (active)"
+      marker="*"
+    else
+      marker=" "
     fi
-    printf "%2d) %s, %s, %s\n" "$i" "$profile_name" "${_accounts[$profile]}" "${_projects[$profile]}"
+    printf "%s%${number_width}d) %s, %s, %s\n" "$marker" "$i" "$profile" "${_accounts[$profile]}" "${_projects[$profile]}"
   done
 }
 
