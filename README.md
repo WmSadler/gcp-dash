@@ -1,4 +1,4 @@
-# GCP Profile Helper Scripts
+# GCP Dash
 
 Small Bash tools for working with isolated Google Cloud profiles (plus one GPU status helper).
 
