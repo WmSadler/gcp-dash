@@ -66,9 +66,11 @@ gcp-status
 
 Argument order:
 
-- `source gcp-auth <profile_number_or_name> [project_id] [account_email]`
+- `source gcp-auth [--no-browser|--no-broser] <profile_number_or_name> [project_id] [account_email]`
 - If no args are provided, `gcp-auth` lists profiles and exits.
 - Selector can be profile name or list index (for example `source gcp-auth 3`).
+- `--no-browser` disables browser auto-launch for auth flows (also accepts typo alias `--no-broser`).
+- On WSL, no-browser mode is auto-enabled when `WSL_INTEROP` or `WSL_DISTRO_NAME` is set.
 
 Input safety:
 
@@ -83,7 +85,7 @@ Update flow for existing profiles:
   - always updates `gcloud config set project`
   - if ADC exists for that profile, runs `gcloud auth application-default set-quota-project`
   - if ADC does not exist, runs `gcloud auth application-default login`
-- Account change (or new profile): runs full `gcloud auth login` + `gcloud auth application-default login`.
+- Account change (or new profile): runs one flow with `gcloud auth login --update-adc`.
 
 ## Commands
 

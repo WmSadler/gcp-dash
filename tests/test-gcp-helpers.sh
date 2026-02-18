@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../gcp-common
+source "${ROOT_DIR}/gcp-common"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -136,6 +138,12 @@ if [[ "${1:-}" == "config" && "${2:-}" == "set" ]]; then
 fi
 
 if [[ "${1:-}" == "auth" && "${2:-}" == "login" ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == "--update-adc" ]]; then
+      touch "${CLOUDSDK_CONFIG:-}/application_default_credentials.json"
+      break
+    fi
+  done
   exit 0
 fi
 
@@ -199,6 +207,40 @@ require_contains "$AUTH_SWAPPED_ARGS" "Warning: argument order looked swapped"
 require_contains "$AUTH_SWAPPED_ARGS" "==> Project: c1-alpha-project"
 require_contains "$AUTH_SWAPPED_ARGS" "==> Preferred account: new-user@company1.com"
 
+: > "${TMP_ROOT}/gcloud.log"
+AUTH_SINGLE_STEP_UPDATE_ADC="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-project combined-flow@company1.com" 2>&1
+)"
+require_contains "$AUTH_SINGLE_STEP_UPDATE_ADC" "auth login --update-adc"
+SINGLE_STEP_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$SINGLE_STEP_LOG" "auth login --account=combined-flow@company1.com"
+require_contains "$SINGLE_STEP_LOG" "--update-adc"
+require_not_contains "$SINGLE_STEP_LOG" "auth application-default login"
+
+: > "${TMP_ROOT}/gcloud.log"
+AUTH_NO_BROWSER="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y --no-browser alpha c1-alpha-project nobrowser-flow@company1.com" 2>&1
+)"
+require_contains "$AUTH_NO_BROWSER" "Browser launch disabled"
+NO_BROWSER_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$NO_BROWSER_LOG" "auth login --account=nobrowser-flow@company1.com --no-launch-browser --update-adc"
+require_not_contains "$NO_BROWSER_LOG" "auth application-default login"
+
+: > "${TMP_ROOT}/gcloud.log"
+AUTH_NO_BROSER_ALIAS="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y --no-broser alpha c1-alpha-project typoalias-flow@company1.com" 2>&1
+)"
+NO_BROSER_ALIAS_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$NO_BROSER_ALIAS_LOG" "auth login --account=typoalias-flow@company1.com --no-launch-browser --update-adc"
+require_not_contains "$NO_BROSER_ALIAS_LOG" "auth application-default login"
+
+: > "${TMP_ROOT}/gcloud.log"
+AUTH_WSL_AUTO_NO_BROWSER="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" WSL_INTEROP='/tmp/wsl.sock' GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-project wsl-auto@company1.com" 2>&1
+)"
+WSL_AUTO_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$WSL_AUTO_LOG" "auth login --account=wsl-auto@company1.com --no-launch-browser --update-adc"
+
 AUTH_SWITCH_BY_INDEX="$(
   bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' source '${ROOT_DIR}/gcp-auth' 3; printf 'CLOUDSDK_CONFIG=%s\n' \"\$CLOUDSDK_CONFIG\""
 )"
@@ -212,6 +254,22 @@ AUTH_BAD_INDEX_CODE=$?
 set -e
 [[ "$AUTH_BAD_INDEX_CODE" -eq 2 ]] || fail "expected gcp-auth invalid numeric selector failure"
 require_contains "$AUTH_BAD_INDEX" "profile number '99' not found"
+
+LOCK_BASE="${TMP_ROOT}/lock-base"
+LOCK_DIR="${LOCK_BASE}/.gcpdash.lock"
+mkdir -p "$LOCK_DIR"
+printf "999999\n" > "${LOCK_DIR}/pid"
+LOCK_STALE_MARKER="${TMP_ROOT}/lock-stale.marker"
+gcp_run_with_lock "$LOCK_BASE" bash -c "printf 'ok\n' > '${LOCK_STALE_MARKER}'"
+[[ -f "$LOCK_STALE_MARKER" ]] || fail "expected stale lock to be reclaimed and command to run"
+[[ ! -d "$LOCK_DIR" ]] || fail "expected stale lock dir to be removed"
+
+set +e
+gcp_run_with_lock "$LOCK_BASE" bash -c 'kill -INT $$'
+LOCK_INT_CODE=$?
+set -e
+[[ "$LOCK_INT_CODE" -eq 130 ]] || fail "expected INT path to return 130 from gcp_run_with_lock"
+[[ ! -d "$LOCK_DIR" ]] || fail "expected lock dir cleanup after INT"
 
 INDEX_OUT="$("${ROOT_DIR}/gcp-")"
 require_contains "$INDEX_OUT" "gcp-cp-profile"

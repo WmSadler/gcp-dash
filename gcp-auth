@@ -16,7 +16,7 @@ fi
 usage() {
   cat <<USAGE
 Usage:
-  source gcp-auth [-y|--yes] <profile_number_or_name> [project_id] [account_email]
+  source gcp-auth [-y|--yes] [--no-browser|--no-broser] <profile_number_or_name> [project_id] [account_email]
   source gcp-auth -l|--list-profiles
   source gcp-auth -h|--help
 
@@ -110,6 +110,10 @@ normalize_project_and_account_args() {
 }
 
 ASSUME_YES=0
+NO_BROWSER=0
+if [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]; then
+  NO_BROWSER=1
+fi
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
     -h|--help)
@@ -122,6 +126,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -y|--yes)
       ASSUME_YES=1
+      shift
+      ;;
+    --no-browser|--no-broser)
+      NO_BROWSER=1
       shift
       ;;
     --)
@@ -302,6 +310,7 @@ fi
 run_auth_mutation() {
   local total_steps=0
   local step=0
+  local run_combined_login=0
 
   umask 077
   mkdir -p "$GCP_CFG_BASE" "$GCP_CFG_DIR"
@@ -315,21 +324,52 @@ run_auth_mutation() {
     gcloud --quiet config set account "$EFFECTIVE_ACCOUNT" >/dev/null || true
   fi
 
-  total_steps=$((RUN_GCLOUD_LOGIN + RUN_ADC_LOGIN + RUN_ADC_QUOTA_SET))
+  if [[ "$RUN_GCLOUD_LOGIN" -eq 1 && "$RUN_ADC_LOGIN" -eq 1 ]]; then
+    run_combined_login=1
+  fi
+  total_steps=$((RUN_GCLOUD_LOGIN + RUN_ADC_LOGIN + RUN_ADC_QUOTA_SET - run_combined_login))
 
-  if [[ "$RUN_GCLOUD_LOGIN" -eq 1 ]]; then
-    step=$((step + 1))
-    echo "==> Step ${step}/${total_steps}: gcloud auth login (user creds for gcloud CLI)"
-    # --brief reduces prompts; if it fails (older gcloud), fall back.
-    gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --brief 2>/dev/null \
-      || gcloud auth login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"}
+  if [[ "$NO_BROWSER" -eq 1 && "$total_steps" -gt 0 ]]; then
+    echo "==> Browser launch disabled; complete login via terminal URL/code prompts."
   fi
 
-  if [[ "$RUN_ADC_LOGIN" -eq 1 ]]; then
+  if [[ "$run_combined_login" -eq 1 ]]; then
+    step=$((step + 1))
+    echo "==> Step ${step}/${total_steps}: gcloud auth login --update-adc (CLI + ADC in one flow)"
+    local -a login_cmd=(gcloud auth login)
+    if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+      login_cmd+=(--account="$EFFECTIVE_ACCOUNT")
+    fi
+    if [[ "$NO_BROWSER" -eq 1 ]]; then
+      login_cmd+=(--no-launch-browser)
+    fi
+    login_cmd+=(--update-adc)
+    "${login_cmd[@]}"
+  elif [[ "$RUN_GCLOUD_LOGIN" -eq 1 ]]; then
+    step=$((step + 1))
+    echo "==> Step ${step}/${total_steps}: gcloud auth login (user creds for gcloud CLI)"
+    local -a login_cmd=(gcloud auth login)
+    if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+      login_cmd+=(--account="$EFFECTIVE_ACCOUNT")
+    fi
+    if [[ "$NO_BROWSER" -eq 1 ]]; then
+      login_cmd+=(--no-launch-browser)
+    fi
+    "${login_cmd[@]}"
+  fi
+
+  if [[ "$RUN_ADC_LOGIN" -eq 1 && "$run_combined_login" -eq 0 ]]; then
     step=$((step + 1))
     echo
     echo "==> Step ${step}/${total_steps}: gcloud auth application-default login (ADC for SDKs/Terraform/libs)"
-    gcloud auth application-default login ${EFFECTIVE_ACCOUNT:+--account="$EFFECTIVE_ACCOUNT"} --quiet
+    local -a adc_login_cmd=(gcloud auth application-default login)
+    if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+      adc_login_cmd+=(--account="$EFFECTIVE_ACCOUNT")
+    fi
+    if [[ "$NO_BROWSER" -eq 1 ]]; then
+      adc_login_cmd+=(--no-launch-browser)
+    fi
+    "${adc_login_cmd[@]}"
   elif [[ "$RUN_ADC_QUOTA_SET" -eq 1 ]]; then
     step=$((step + 1))
     echo

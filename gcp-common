@@ -146,38 +146,54 @@ gcp_run_with_lock() {
   local base_dir="$1"
   shift
 
-  local lock_dir
-  lock_dir="$(gcp_lock_dir "$base_dir")"
-  mkdir -p "$base_dir"
-
-  if ! mkdir "$lock_dir" 2>/dev/null; then
-    if [[ -f "${lock_dir}/pid" ]]; then
-      local lock_pid
-      lock_pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
-      if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
-        rm -rf -- "$lock_dir"
-      fi
-    fi
-
-    if ! mkdir "$lock_dir" 2>/dev/null; then
-      echo "Error: another profile operation is in progress (lock: $lock_dir)." >&2
-      return 1
-    fi
-  fi
-
-  printf "%s\n" "$$" > "${lock_dir}/pid"
-
   local had_errexit=0
   [[ "$-" == *e* ]] && had_errexit=1
   set +e
   (
     set -e
+    local lock_dir
+    local lock_pid_file
+    local worker_pid
+    lock_dir="$(gcp_lock_dir "$base_dir")"
+    lock_pid_file="${lock_dir}/pid"
+    worker_pid="$BASHPID"
+
+    gcp_cleanup_worker_lock() {
+      local lock_owner
+      lock_owner="$(cat "$lock_pid_file" 2>/dev/null || true)"
+      if [[ "$lock_owner" == "$worker_pid" ]]; then
+        rm -rf -- "$lock_dir"
+      fi
+    }
+
+    mkdir -p "$base_dir"
+    if ! mkdir "$lock_dir" 2>/dev/null; then
+      local lock_owner
+      local stale_lock=0
+      lock_owner="$(cat "$lock_pid_file" 2>/dev/null || true)"
+      if [[ -z "$lock_owner" || "$lock_owner" == "$worker_pid" || ! "$lock_owner" =~ ^[0-9]+$ ]]; then
+        stale_lock=1
+      elif ! kill -0 "$lock_owner" 2>/dev/null; then
+        stale_lock=1
+      fi
+      if [[ "$stale_lock" -eq 1 ]]; then
+        rm -rf -- "$lock_dir"
+      fi
+      if ! mkdir "$lock_dir" 2>/dev/null; then
+        echo "Error: another profile operation is in progress (lock: $lock_dir)." >&2
+        exit 1
+      fi
+    fi
+
+    printf "%s\n" "$worker_pid" > "$lock_pid_file"
+    trap 'gcp_cleanup_worker_lock' EXIT
+    trap 'gcp_cleanup_worker_lock; exit 130' INT
+    trap 'gcp_cleanup_worker_lock; exit 143' TERM
+
     "$@"
   )
   local rc=$?
   (( had_errexit )) && set -e
-
-  rm -rf -- "$lock_dir"
   return "$rc"
 }
 
