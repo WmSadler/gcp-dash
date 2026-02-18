@@ -20,7 +20,7 @@ Examples:
   gcp-rm-profile 1,3,5
 
 Notes:
-  - Profile base is \$GCP_CFG_BASE or ~/.config/gcloud-codex by default.
+  - Profile base is \$GCP_CFG_BASE or \$XDG_CONFIG_HOME/gcpdash (or ~/.config/gcpdash) by default.
   - Deletion is recursive and permanent.
 USAGE
   echo

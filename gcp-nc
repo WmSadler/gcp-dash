@@ -20,7 +20,7 @@ Examples:
   gcp-nc c1-stage c1-dev
 
 Notes:
-  - Profile base is \$GCP_CFG_BASE or ~/.config/gcloud-codex by default.
+  - Profile base is \$GCP_CFG_BASE or \$XDG_CONFIG_HOME/gcpdash (or ~/.config/gcpdash) by default.
   - Renames the profile directory only; auth/config data stays inside it.
 USAGE
   echo

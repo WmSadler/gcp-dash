@@ -96,12 +96,12 @@ gcp-ls -j
 
 By default profiles are stored per-user:
 
-- `~/.config/gcloud-codex/<profile>`
+- `${XDG_CONFIG_HOME:-~/.config}/gcpdash/<profile>`
 
 Override profile root if desired:
 
 ```bash
-export GCP_CFG_BASE="$PWD/.gcloud-codex"
+export GCP_CFG_BASE="$PWD/.gcpdash"
 ```
 
 ## Safety Notes
