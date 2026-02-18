@@ -227,17 +227,13 @@ require_contains "$NO_BROWSER_LOG" "auth login --account=nobrowser-flow@company1
 require_not_contains "$NO_BROWSER_LOG" "auth application-default login"
 
 : > "${TMP_ROOT}/gcloud.log"
-AUTH_NO_BROSER_ALIAS="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y --no-broser alpha c1-alpha-project typoalias-flow@company1.com" 2>&1
-)"
+bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y --no-broser alpha c1-alpha-project typoalias-flow@company1.com" >/dev/null 2>&1
 NO_BROSER_ALIAS_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
 require_contains "$NO_BROSER_ALIAS_LOG" "auth login --account=typoalias-flow@company1.com --no-launch-browser --update-adc"
 require_not_contains "$NO_BROSER_ALIAS_LOG" "auth application-default login"
 
 : > "${TMP_ROOT}/gcloud.log"
-AUTH_WSL_AUTO_NO_BROWSER="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" WSL_INTEROP='/tmp/wsl.sock' GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-project wsl-auto@company1.com" 2>&1
-)"
+bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" WSL_INTEROP='/tmp/wsl.sock' GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-project wsl-auto@company1.com" >/dev/null 2>&1
 WSL_AUTO_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
 require_contains "$WSL_AUTO_LOG" "auth login --account=wsl-auto@company1.com --no-launch-browser --update-adc"
 
