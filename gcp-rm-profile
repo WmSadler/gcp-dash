@@ -126,7 +126,7 @@ fi
 run_delete_profiles() {
   local name
   for name in "${selected[@]}"; do
-    rm -rf -- "$BASE_DIR/$name"
+    rm -rf -- "${BASE_DIR:?}/$name"
     echo "Deleted: $name"
   done
 }

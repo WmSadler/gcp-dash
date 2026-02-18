@@ -46,8 +46,11 @@ fi
 
 BASE_DIR="$(gcp_base_dir)"
 ACTIVE_PROFILE="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_*
 declare -a profiles=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_*
 declare -A profile_accounts=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_*
 declare -A profile_projects=()
 
 gcp_collect_profiles "$BASE_DIR" profiles profile_accounts profile_projects
