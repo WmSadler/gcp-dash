@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  gcp-ls
+  gcp-ls -j|--json
+  gcp-ls -h|--help
+
+Description:
+  Lists saved GCP profiles in alphabetical order with profile, account, and project.
+USAGE
+  echo
+  echo "Other GCP commands:"
+  gcp_print_command_catalog "gcp-ls"
+}
+
+JSON_OUTPUT=0
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  -j|--json)
+    JSON_OUTPUT=1
+    ;;
+  "")
+    ;;
+  *)
+    echo "Error: unknown argument: $1" >&2
+    usage
+    exit 2
+    ;;
+esac
+
+if [[ "$JSON_OUTPUT" -eq 1 && "$#" -gt 1 ]]; then
+  echo "Error: unexpected extra arguments for --json mode." >&2
+  usage
+  exit 2
+fi
+
+BASE_DIR="$(gcp_base_dir)"
+ACTIVE_PROFILE="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+declare -a profiles=()
+declare -A profile_accounts=()
+declare -A profile_projects=()
+
+gcp_collect_profiles "$BASE_DIR" profiles profile_accounts profile_projects
+
+if [[ "${#profiles[@]}" -eq 0 ]]; then
+  if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+    printf '{"base_dir":"%s","profiles":[]}\n' "$(gcp_json_escape "$BASE_DIR")"
+  else
+    echo "GCP profile base: $BASE_DIR"
+    echo "(no profiles found)"
+  fi
+  exit 0
+fi
+
+if [[ "$JSON_OUTPUT" -eq 1 ]]; then
+  gcp_print_profiles_json "$BASE_DIR" profiles profile_accounts profile_projects "$ACTIVE_PROFILE"
+else
+  echo "GCP profile base: $BASE_DIR"
+  gcp_print_profiles_numbered profiles profile_accounts profile_projects "$ACTIVE_PROFILE"
+fi

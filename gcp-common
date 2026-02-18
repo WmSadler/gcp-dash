@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+
+GCP_COMMAND_CATALOG=(
+  "gcp-|show all available gcp helper commands"
+  "gcp-auth|authenticate/switch profile for current shell"
+  "gcp-status|show current shell gcp context"
+  "gcp-ls|list profiles"
+  "gcp-cp-profile|copy a profile by number or name"
+  "gcp-nc|rename a profile by number or name"
+  "gcp-rm-profile|delete profiles by number"
+)
+
+gcp_lock_dir() {
+  local base_dir="$1"
+  printf "%s/.gcp-codex.lock" "$base_dir"
+}
+
+gcp_base_dir() {
+  printf "%s" "${GCP_CFG_BASE:-${HOME}/.config/gcloud-codex}"
+}
+
+gcp_profile_config_file() {
+  local profile_dir="$1"
+  local cfg_file="${profile_dir}/configurations/config_default"
+  if [[ -s "${profile_dir}/active_config" ]]; then
+    cfg_file="${profile_dir}/configurations/config_$(<"${profile_dir}/active_config")"
+  fi
+  printf "%s" "$cfg_file"
+}
+
+gcp_profile_value() {
+  local profile_dir="$1"
+  local key="$2"
+  local cfg_file
+  local value="<unset>"
+
+  cfg_file="$(gcp_profile_config_file "$profile_dir")"
+  if [[ -f "$cfg_file" ]]; then
+    value="$(sed -n "s/^${key}[[:space:]]*=[[:space:]]*//p" "$cfg_file" | head -n1)"
+    [[ -z "$value" ]] && value="<unset>"
+  fi
+
+  printf "%s" "$value"
+}
+
+gcp_collect_profiles() {
+  local base_dir="$1"
+  local -n _profiles="$2"
+  local -n _accounts="$3"
+  local -n _projects="$4"
+  local profile
+
+  _profiles=()
+  _accounts=()
+  _projects=()
+
+  [[ -d "$base_dir" ]] || return 0
+
+  mapfile -t _profiles < <(
+    for dir in "$base_dir"/*; do
+      [[ -d "$dir" ]] && basename "$dir"
+    done | LC_ALL=C sort -f
+  )
+
+  for profile in "${_profiles[@]}"; do
+    local profile_dir="${base_dir}/${profile}"
+    _accounts["$profile"]="$(gcp_profile_value "$profile_dir" account)"
+    _projects["$profile"]="$(gcp_profile_value "$profile_dir" project)"
+  done
+}
+
+gcp_print_profiles_numbered() {
+  local -n _profiles="$1"
+  local -n _accounts="$2"
+  local -n _projects="$3"
+  local active_profile="${4:-}"
+  local i=0
+  local profile
+  local profile_name
+
+  for profile in "${_profiles[@]}"; do
+    i=$((i + 1))
+    profile_name="$profile"
+    if [[ -n "$active_profile" && "$profile" == "$active_profile" ]]; then
+      profile_name="${profile_name} (active)"
+    fi
+    printf "%2d) %s, %s, %s\n" "$i" "$profile_name" "${_accounts[$profile]}" "${_projects[$profile]}"
+  done
+}
+
+gcp_validate_new_profile_name() {
+  local name="$1"
+  [[ -n "$name" ]] || return 1
+  [[ "$name" != "." && "$name" != ".." && "$name" != *"/"* ]] || return 1
+  return 0
+}
+
+gcp_resolve_profile_selector() {
+  local -n _profiles="$1"
+  local selector_raw="$2"
+  local -n _profile_out="$3"
+  local -n _index_out="$4"
+  local selector
+  local i
+
+  selector="$(echo "$selector_raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [[ -n "$selector" ]] || return 1
+
+  if [[ "$selector" =~ ^[0-9]+$ ]]; then
+    if (( selector < 1 || selector > ${#_profiles[@]} )); then
+      return 1
+    fi
+    _index_out="$selector"
+    _profile_out="${_profiles[$((selector - 1))]}"
+    return 0
+  fi
+
+  for i in "${!_profiles[@]}"; do
+    if [[ "${_profiles[$i]}" == "$selector" ]]; then
+      _index_out="$((i + 1))"
+      _profile_out="${_profiles[$i]}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+gcp_run_with_lock() {
+  local base_dir="$1"
+  shift
+
+  local lock_dir
+  lock_dir="$(gcp_lock_dir "$base_dir")"
+  mkdir -p "$base_dir"
+
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    if [[ -f "${lock_dir}/pid" ]]; then
+      local lock_pid
+      lock_pid="$(cat "${lock_dir}/pid" 2>/dev/null || true)"
+      if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -rf -- "$lock_dir"
+      fi
+    fi
+
+    if ! mkdir "$lock_dir" 2>/dev/null; then
+      echo "Error: another profile operation is in progress (lock: $lock_dir)." >&2
+      return 1
+    fi
+  fi
+
+  printf "%s\n" "$$" > "${lock_dir}/pid"
+
+  local had_errexit=0
+  [[ "$-" == *e* ]] && had_errexit=1
+  set +e
+  (
+    set -e
+    "$@"
+  )
+  local rc=$?
+  (( had_errexit )) && set -e
+
+  rm -rf -- "$lock_dir"
+  return "$rc"
+}
+
+gcp_json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf "%s" "$s"
+}
+
+gcp_print_profiles_json() {
+  local base_dir="$1"
+  local -n _profiles="$2"
+  local -n _accounts="$3"
+  local -n _projects="$4"
+  local active_profile="${5:-}"
+  local i
+  local profile
+
+  printf '{"base_dir":"%s","profiles":[' "$(gcp_json_escape "$base_dir")"
+  for i in "${!_profiles[@]}"; do
+    profile="${_profiles[$i]}"
+    if (( i > 0 )); then
+      printf ","
+    fi
+    printf '{"index":%d,"name":"%s","account":"%s","project":"%s","active":%s}' \
+      "$((i + 1))" \
+      "$(gcp_json_escape "$profile")" \
+      "$(gcp_json_escape "${_accounts[$profile]}")" \
+      "$(gcp_json_escape "${_projects[$profile]}")" \
+      "$( [[ -n "$active_profile" && "$profile" == "$active_profile" ]] && printf "true" || printf "false" )"
+  done
+  printf ']}\n'
+}
+
+gcp_print_command_catalog() {
+  local current="${1:-}"
+  local entry cmd desc
+
+  for entry in "${GCP_COMMAND_CATALOG[@]}"; do
+    cmd="${entry%%|*}"
+    desc="${entry#*|}"
+    [[ -n "$current" && "$cmd" == "$current" ]] && continue
+    printf "  %-14s %s\n" "$cmd" "$desc"
+  done
+}

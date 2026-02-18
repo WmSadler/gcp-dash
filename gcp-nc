@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  gcp-nc [-y|--yes] [profile_number_or_name] [new_name]
+  gcp-nc -h|--help
+
+Description:
+  Lists saved GCP profiles and renames one profile by number or name.
+
+Examples:
+  gcp-nc
+  gcp-nc 2 c1-prod
+  gcp-nc c1-stage c1-dev
+
+Notes:
+  - Profile base is \$GCP_CFG_BASE or ~/.config/gcloud-codex by default.
+  - Renames the profile directory only; auth/config data stays inside it.
+USAGE
+  echo
+  echo "Other GCP commands:"
+  gcp_print_command_catalog "gcp-nc"
+}
+
+BASE_DIR="$(gcp_base_dir)"
+declare -a profiles=()
+declare -A profile_accounts=()
+declare -A profile_projects=()
+ASSUME_YES=0
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -y|--yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "Error: unknown option: $1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+list_profiles() {
+  gcp_collect_profiles "$BASE_DIR" profiles profile_accounts profile_projects
+}
+
+print_profiles() {
+  echo "GCP profiles in: $BASE_DIR"
+  gcp_print_profiles_numbered profiles profile_accounts profile_projects
+  echo
+}
+
+INITIAL_PROFILE_SELECTOR="${1:-}"
+INITIAL_NEW_NAME="${2:-}"
+USE_INITIAL=0
+if [[ -n "$INITIAL_PROFILE_SELECTOR" ]]; then
+  USE_INITIAL=1
+fi
+
+while true; do
+  list_profiles
+
+  if [[ "${#profiles[@]}" -eq 0 ]]; then
+    echo "No profiles found in: $BASE_DIR"
+    exit 0
+  fi
+
+  print_profiles
+
+  PROFILE_SELECTOR=""
+  NEW_NAME=""
+  if [[ "$USE_INITIAL" -eq 1 ]]; then
+    PROFILE_SELECTOR="$INITIAL_PROFILE_SELECTOR"
+    NEW_NAME="$INITIAL_NEW_NAME"
+    USE_INITIAL=0
+  fi
+
+  if [[ -z "$PROFILE_SELECTOR" ]]; then
+    if [[ ! -t 0 ]]; then
+      exit 0
+    fi
+    read -r -p "Enter profile number or name to rename (blank ends): " PROFILE_SELECTOR
+  fi
+
+  PROFILE_SELECTOR="$(echo "$PROFILE_SELECTOR" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ -z "$PROFILE_SELECTOR" ]]; then
+    echo "Done."
+    exit 0
+  fi
+
+  OLD_NAME=""
+  OLD_INDEX=0
+  if ! gcp_resolve_profile_selector profiles "$PROFILE_SELECTOR" OLD_NAME OLD_INDEX; then
+    echo "Error: profile selector '$PROFILE_SELECTOR' not found." >&2
+    if [[ -t 0 ]]; then
+      echo
+      continue
+    fi
+    exit 2
+  fi
+
+  OLD_DIR="${BASE_DIR}/${OLD_NAME}"
+
+  if [[ -z "$NEW_NAME" ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "Error: new name required in non-interactive mode." >&2
+      exit 2
+    fi
+    read -r -p "Enter new name for '${OLD_NAME}' (blank cancels): " NEW_NAME
+  fi
+
+  NEW_NAME="$(echo "$NEW_NAME" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  if [[ -z "$NEW_NAME" ]]; then
+    echo "No new name provided. Nothing changed."
+    echo
+    continue
+  fi
+
+  if ! gcp_validate_new_profile_name "$NEW_NAME"; then
+    echo "Error: invalid new name '$NEW_NAME'." >&2
+    if [[ -t 0 ]]; then
+      echo
+      continue
+    fi
+    exit 2
+  fi
+
+  if [[ "$NEW_NAME" == "$OLD_NAME" ]]; then
+    echo "New name matches current name. Nothing changed."
+    echo
+    continue
+  fi
+
+  NEW_DIR="${BASE_DIR}/${NEW_NAME}"
+  if [[ -e "$NEW_DIR" ]]; then
+    echo "Error: target profile '$NEW_NAME' already exists." >&2
+    if [[ -t 0 ]]; then
+      echo
+      continue
+    fi
+    exit 2
+  fi
+
+  if [[ ! -t 0 && "$ASSUME_YES" -ne 1 ]]; then
+    echo "Error: non-interactive mutation requires -y|--yes." >&2
+    exit 2
+  fi
+
+  run_rename_profile() {
+    mv -- "$OLD_DIR" "$NEW_DIR"
+  }
+
+  if ! gcp_run_with_lock "$BASE_DIR" run_rename_profile; then
+    if [[ -t 0 ]]; then
+      echo
+      continue
+    fi
+    exit 1
+  fi
+  echo "Renamed profile #$OLD_INDEX: '$OLD_NAME' -> '$NEW_NAME'"
+
+  if [[ "${CLOUDSDK_CONFIG:-}" == "$OLD_DIR" ]]; then
+    echo "Note: current shell CLOUDSDK_CONFIG still points to old path."
+    echo "      Run: source gcp-auth $NEW_NAME"
+  fi
+  echo
+done

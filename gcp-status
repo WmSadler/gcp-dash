@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  gcp-status
+  gcp-status -l|-p|--list-profiles|--profiles
+  gcp-status -h|--help
+
+Description:
+  Prints the active GCP shell context for this terminal:
+  - env project/config pins
+  - gcloud account/project/auth list
+  - ADC file path and mtime
+  - python google.auth.default() probe (if available)
+USAGE
+  echo
+  echo "Other GCP commands:"
+  gcp_print_command_catalog "gcp-status"
+}
+
+list_profiles() {
+  local base_dir
+  base_dir="$(gcp_base_dir)"
+  local active_profile
+  active_profile="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+  declare -a profiles=()
+  declare -A profile_accounts=()
+  declare -A profile_projects=()
+
+  echo "GCP profile base: $base_dir"
+  gcp_collect_profiles "$base_dir" profiles profile_accounts profile_projects
+
+  if [[ "${#profiles[@]}" -eq 0 ]]; then
+    echo "(no profiles found)"
+    return 0
+  fi
+
+  gcp_print_profiles_numbered profiles profile_accounts profile_projects "$active_profile"
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  -l|-p|--list-profiles|--profiles)
+    list_profiles
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    echo "Error: unknown argument: $1" >&2
+    usage
+    exit 2
+    ;;
+esac
+
+echo "=== GCP STATUS (this shell) ==="
+echo "Date: $(date)"
+echo
+
+echo "-- Environment pins --"
+echo "CLOUDSDK_CONFIG=${CLOUDSDK_CONFIG:-<not set>}"
+echo "GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-<not set>}"
+echo "GCLOUD_PROJECT=${GCLOUD_PROJECT:-<not set>}"
+echo "CLOUDSDK_CORE_PROJECT=${CLOUDSDK_CORE_PROJECT:-<not set>}"
+echo
+
+echo "-- gcloud config --"
+if command -v gcloud >/dev/null 2>&1; then
+  echo "Account: $(gcloud config get-value account 2>/dev/null || echo '<none>')"
+  echo "Project: $(gcloud config get-value project 2>/dev/null || echo '<none>')"
+  echo "Active config dir: ${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}"
+  echo
+  echo "-- gcloud auth list --"
+  gcloud auth list 2>/dev/null || echo "(gcloud auth list failed)"
+else
+  echo "gcloud not found in PATH"
+fi
+echo
+
+echo "-- ADC (Application Default Credentials) --"
+if [[ -n "${CLOUDSDK_CONFIG:-}" ]]; then
+  ADC_PATH="${CLOUDSDK_CONFIG}/application_default_credentials.json"
+else
+  ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
+fi
+echo "ADC file: $ADC_PATH"
+if [[ -f "$ADC_PATH" ]]; then
+  echo "ADC exists: yes"
+  ADC_MTIME="$(stat -c '%y' "$ADC_PATH" 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$ADC_PATH" 2>/dev/null || echo '<unknown>')"
+  echo "ADC mtime : $ADC_MTIME"
+else
+  echo "ADC exists: no"
+fi
+echo
+
+echo "-- Quick SDK default() probe (python) --"
+if command -v python3 >/dev/null 2>&1; then
+  python3 - <<'PY'
+try:
+    import google.auth
+    creds, proj = google.auth.default()
+    print("google.auth.default() project:", proj)
+    print("credential type:", type(creds).__name__)
+except Exception as e:
+    print("google.auth.default() failed:", e)
+PY
+else
+  echo "python3 not found"
+fi

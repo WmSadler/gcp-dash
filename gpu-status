@@ -1,0 +1,57 @@
+#!/bin/bash
+
+declare -A HOSTS=(
+  ["espadaYdaga"]="localhost"
+  ["rapier"]="rapier"
+  ["katana"]="katana"
+)
+
+declare -A CORES_PER_SM=(
+  ["RTX 3080"]=128
+  ["RTX 2060"]=64
+  ["RTX 4050"]=128
+)
+
+query_gpu() {
+  local host=$1
+  local cmd="nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader,nounits"
+
+  if [[ "$host" == "localhost" ]]; then
+    output=$(eval "$cmd")
+  else
+    output=$(ssh "$host" "$cmd" 2>/dev/null)
+  fi
+
+  IFS=',' read -ra fields <<< "$output"
+  gpu=$(echo "${fields[0]}" | xargs)
+  vram_total=$(echo "${fields[1]}" | xargs)
+  vram_free=$(echo "${fields[2]}" | xargs)
+  driver=$(echo "${fields[3]}" | xargs)
+
+  # Try to identify GPU model and approximate cores if known
+  model_key=$(echo "$gpu" | grep -o 'RTX [0-9]\{4\}' | head -1)
+  cores_per_sm=${CORES_PER_SM[$model_key]:-?}
+  sms="?"
+  total_cores="?"
+
+  if [[ "$cores_per_sm" != "?" ]]; then
+    # Estimate SMs based on VRAM (rough fallback if multiprocessor count not available)
+    case $model_key in
+      "RTX 3080") sms=68 ;;
+      "RTX 2060") sms=30 ;;
+      "RTX 4050") sms=24 ;; # Laptop version approximation
+    esac
+    total_cores=$((sms * cores_per_sm))
+  fi
+
+  printf "%-12s | %-28s | %6s / %6s MB | %-14s | %5s SMs | %6s CUDA cores\n" \
+    "$host" "$gpu" "$vram_free" "$vram_total" "$driver" "$sms" "$total_cores"
+}
+
+
+echo "System       | GPU Model                   | Free / Total VRAM | Driver         |  SMs | CUDA Cores"
+echo "-------------|------------------------------|-------------------|----------------|------|------------"
+
+for host in "${!HOSTS[@]}"; do
+  query_gpu "${HOSTS[$host]}"
+done

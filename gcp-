@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  gcp-
+  gcp- -h|--help
+
+Description:
+  Shows all available gcp helper commands.
+USAGE
+  echo
+  gcp_print_command_catalog
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    echo "Error: unknown argument: $1" >&2
+    usage
+    exit 2
+    ;;
+esac
+
+echo "Available GCP helper commands:"
+gcp_print_command_catalog
