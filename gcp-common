@@ -70,21 +70,34 @@ gcp_collect_profiles() {
 }
 
 gcp_print_profiles_numbered() {
+  # shellcheck disable=SC2178  # nameref target is array/map selected by caller
   local -n _profiles="$1"
+  # shellcheck disable=SC2178  # nameref target is array/map selected by caller
   local -n _accounts="$2"
+  # shellcheck disable=SC2178  # nameref target is array/map selected by caller
   local -n _projects="$3"
   local active_profile="${4:-}"
   local i=0
+  local marker=" "
+  local number_width
   local profile
-  local profile_name
+
+  # Fall back to the shell-pinned profile when active_profile isn't passed.
+  if [[ -z "$active_profile" && -n "${CLOUDSDK_CONFIG:-}" ]]; then
+    active_profile="$(basename "$CLOUDSDK_CONFIG")"
+  fi
+
+  number_width="${#_profiles[@]}"
+  number_width="${#number_width}"
 
   for profile in "${_profiles[@]}"; do
     i=$((i + 1))
-    profile_name="$profile"
     if [[ -n "$active_profile" && "$profile" == "$active_profile" ]]; then
-      profile_name="${profile_name} (active)"
+      marker="*"
+    else
+      marker=" "
     fi
-    printf "%2d) %s, %s, %s\n" "$i" "$profile_name" "${_accounts[$profile]}" "${_projects[$profile]}"
+    printf "%s%${number_width}d) %s, %s, %s\n" "$marker" "$i" "$profile" "${_accounts[$profile]}" "${_projects[$profile]}"
   done
 }
 
@@ -96,9 +109,12 @@ gcp_validate_new_profile_name() {
 }
 
 gcp_resolve_profile_selector() {
+  # shellcheck disable=SC2178  # nameref target is array selected by caller
   local -n _profiles="$1"
   local selector_raw="$2"
+  # shellcheck disable=SC2178  # nameref output value selected by caller
   local -n _profile_out="$3"
+  # shellcheck disable=SC2178  # nameref output value selected by caller
   local -n _index_out="$4"
   local selector
   local i
@@ -177,8 +193,11 @@ gcp_json_escape() {
 
 gcp_print_profiles_json() {
   local base_dir="$1"
+  # shellcheck disable=SC2178  # nameref target is array selected by caller
   local -n _profiles="$2"
+  # shellcheck disable=SC2178  # nameref target is map selected by caller
   local -n _accounts="$3"
+  # shellcheck disable=SC2178  # nameref target is map selected by caller
   local -n _projects="$4"
   local active_profile="${5:-}"
   local i
