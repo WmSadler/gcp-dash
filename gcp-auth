@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./gcp-common
 source "${SCRIPT_DIR}/gcp-common"
+RUNNING_AS_SCRIPT=0
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  RUNNING_AS_SCRIPT=1
+fi
 
 usage() {
   cat <<USAGE
@@ -21,13 +25,18 @@ Notes:
   - This script is intended to be sourced by the current shell.
   - Use 'source' so CLOUDSDK_CONFIG/PROJECT vars are applied to the current shell.
   - Creates isolated gcloud config + ADC per profile under \$GCP_CFG_BASE/<profile>
-  - Default GCP_CFG_BASE is ~/.config/gcloud-codex
+  - Default GCP_CFG_BASE is \$XDG_CONFIG_HOME/gcpdash (or ~/.config/gcpdash)
   - Useful for pinning a VS Code terminal (and Codex) to one GCP profile/project.
   - Scope: human user auth context only; no service account impersonation helpers.
 USAGE
   echo
   echo "Other GCP commands:"
   gcp_print_command_catalog "gcp-auth"
+  if [[ "$RUNNING_AS_SCRIPT" -eq 1 ]]; then
+    echo
+    echo "Saved profiles:"
+    list_profiles
+  fi
 }
 
 list_profiles() {

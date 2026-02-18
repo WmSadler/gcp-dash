@@ -12,11 +12,11 @@ GCP_COMMAND_CATALOG=(
 
 gcp_lock_dir() {
   local base_dir="$1"
-  printf "%s/.gcp-codex.lock" "$base_dir"
+  printf "%s/.gcpdash.lock" "$base_dir"
 }
 
 gcp_base_dir() {
-  printf "%s" "${GCP_CFG_BASE:-${HOME}/.config/gcloud-codex}"
+  printf "%s" "${GCP_CFG_BASE:-${XDG_CONFIG_HOME:-${HOME}/.config}/gcpdash}"
 }
 
 gcp_profile_config_file() {
