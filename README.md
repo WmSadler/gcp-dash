@@ -138,7 +138,6 @@ Included scripts:
 - `gcp-cp-profile`: Copy profile by number or name to a new name.
 - `gcp-nc`: Rename profile by number or name.
 - `gcp-rm-profile`: Delete one or more profiles by number.
-- `gpu-status`: Show GPU status across configured hosts.
 
 All profile-list output uses:
 
