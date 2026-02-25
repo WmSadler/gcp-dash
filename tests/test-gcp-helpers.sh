@@ -138,6 +138,29 @@ if [[ "${1:-}" == "config" && "${2:-}" == "set" ]]; then
 fi
 
 if [[ "${1:-}" == "auth" && "${2:-}" == "login" ]]; then
+  if [[ -n "${FAKE_GCLOUD_LOGIN_ACCOUNT:-}" ]]; then
+    cfg="${CLOUDSDK_CONFIG:-}/configurations/config_default"
+    mkdir -p "$(dirname "$cfg")"
+    if [[ ! -f "$cfg" ]]; then
+      printf "[core]\n" > "$cfg"
+    fi
+    tmp_cfg="${cfg}.tmp"
+    awk -v key="account" -v value="${FAKE_GCLOUD_LOGIN_ACCOUNT}" '
+      BEGIN { replaced=0 }
+      $0 ~ "^" key "[[:space:]]*=" {
+        print key " = " value
+        replaced=1
+        next
+      }
+      { print }
+      END {
+        if (!replaced) {
+          print key " = " value
+        }
+      }
+    ' "$cfg" > "$tmp_cfg"
+    mv "$tmp_cfg" "$cfg"
+  fi
   for arg in "$@"; do
     if [[ "$arg" == "--update-adc" ]]; then
       touch "${CLOUDSDK_CONFIG:-}/application_default_credentials.json"
@@ -156,10 +179,59 @@ if [[ "${1:-}" == "auth" && "${2:-}" == "application-default" && "${3:-}" == "se
   exit 0
 fi
 
+if [[ "${1:-}" == "auth" && "${2:-}" == "print-access-token" ]]; then
+  if [[ -n "${FAKE_GCLOUD_FAIL_AUTH_TOKEN:-}" ]]; then
+    echo "token refresh failed" >&2
+    exit 1
+  fi
+  echo "ya29.fake-user-token"
+  exit 0
+fi
+
+if [[ "${1:-}" == "auth" && "${2:-}" == "application-default" && "${3:-}" == "print-access-token" ]]; then
+  if [[ -n "${FAKE_GCLOUD_FAIL_ADC_TOKEN:-}" ]]; then
+    echo "adc token refresh failed" >&2
+    exit 1
+  fi
+  echo "ya29.fake-adc-token"
+  exit 0
+fi
+
+if [[ "${1:-}" == "auth" && "${2:-}" == "list" ]]; then
+  echo "Credentialed Accounts"
+  exit 0
+fi
+
 echo "fake gcloud unexpected args: $*" >&2
 exit 1
 EOF
 chmod +x "${FAKE_BIN}/gcloud"
+
+STATUS_VERIFY_OK="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' '${ROOT_DIR}/gcp-status' --verify" 2>&1
+)"
+require_contains "$STATUS_VERIFY_OK" "VERIFY OK"
+require_contains "$STATUS_VERIFY_OK" "gcloud user token is alive"
+require_contains "$STATUS_VERIFY_OK" "ADC token is alive"
+
+set +e
+STATUS_VERIFY_PROJECT_MISMATCH="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='different-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' '${ROOT_DIR}/gcp-status' -v" 2>&1
+)"
+STATUS_VERIFY_PROJECT_MISMATCH_CODE=$?
+set -e
+[[ "$STATUS_VERIFY_PROJECT_MISMATCH_CODE" -eq 1 ]] || fail "expected gcp-status --verify project mismatch failure"
+require_contains "$STATUS_VERIFY_PROJECT_MISMATCH" "VERIFY FAILED"
+require_contains "$STATUS_VERIFY_PROJECT_MISMATCH" "does not match expected project"
+
+set +e
+STATUS_VERIFY_TOKEN_STALE="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' FAKE_GCLOUD_FAIL_AUTH_TOKEN=1 '${ROOT_DIR}/gcp-status' -v" 2>&1
+)"
+STATUS_VERIFY_TOKEN_STALE_CODE=$?
+set -e
+[[ "$STATUS_VERIFY_TOKEN_STALE_CODE" -eq 1 ]] || fail "expected gcp-status --verify token stale failure"
+require_contains "$STATUS_VERIFY_TOKEN_STALE" "gcloud user token is stale/invalid"
 
 : > "${TMP_ROOT}/gcloud.log"
 set +e
@@ -251,6 +323,63 @@ set -e
 [[ "$AUTH_BAD_INDEX_CODE" -eq 2 ]] || fail "expected gcp-auth invalid numeric selector failure"
 require_contains "$AUTH_BAD_INDEX" "profile number '99' not found"
 
+: > "${TMP_ROOT}/gcloud.log"
+set +e
+REAUTH_NEEDS_YES="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' '${ROOT_DIR}/gcp-reauth' alpha" 2>&1
+)"
+REAUTH_NEEDS_YES_CODE=$?
+set -e
+[[ "$REAUTH_NEEDS_YES_CODE" -eq 2 ]] || fail "expected gcp-reauth non-interactive -y requirement"
+require_contains "$REAUTH_NEEDS_YES" "non-interactive re-auth requires -y|--yes"
+
+: > "${TMP_ROOT}/gcloud.log"
+REAUTH_EXPLICIT="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' '${ROOT_DIR}/gcp-reauth' -y alpha reauth-flow@company1.com" 2>&1
+)"
+require_contains "$REAUTH_EXPLICIT" "==> Re-auth profile: alpha"
+require_contains "$REAUTH_EXPLICIT" "Step 1/2"
+require_contains "$REAUTH_EXPLICIT" "Step 2/2"
+REAUTH_EXPLICIT_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$REAUTH_EXPLICIT_LOG" "config set project c1-alpha-project"
+require_contains "$REAUTH_EXPLICIT_LOG" "config set account reauth-flow@company1.com"
+require_contains "$REAUTH_EXPLICIT_LOG" "auth login"
+require_contains "$REAUTH_EXPLICIT_LOG" "--account=reauth-flow@company1.com"
+require_contains "$REAUTH_EXPLICIT_LOG" "--update-adc"
+require_contains "$REAUTH_EXPLICIT_LOG" "auth application-default set-quota-project c1-alpha-project"
+
+: > "${TMP_ROOT}/gcloud.log"
+set +e
+REAUTH_ACCOUNT_MISMATCH="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' FAKE_GCLOUD_LOGIN_ACCOUNT='wrong-user@company1.com' '${ROOT_DIR}/gcp-reauth' -y alpha reauth-flow@company1.com" 2>&1
+)"
+REAUTH_ACCOUNT_MISMATCH_CODE=$?
+set -e
+[[ "$REAUTH_ACCOUNT_MISMATCH_CODE" -eq 1 ]] || fail "expected gcp-reauth account mismatch failure"
+require_contains "$REAUTH_ACCOUNT_MISMATCH" "login completed as 'wrong-user@company1.com' but profile expects 'reauth-flow@company1.com'"
+MISMATCH_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$MISMATCH_LOG" "auth login"
+require_not_contains "$MISMATCH_LOG" "auth application-default set-quota-project c1-alpha-project"
+
+: > "${TMP_ROOT}/gcloud.log"
+REAUTH_FROM_ENV="$(
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' '${ROOT_DIR}/gcp-reauth' -y" 2>&1
+)"
+require_contains "$REAUTH_FROM_ENV" "==> Re-auth profile: alpha"
+REAUTH_FROM_ENV_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
+require_contains "$REAUTH_FROM_ENV_LOG" "auth login"
+require_contains "$REAUTH_FROM_ENV_LOG" "--update-adc"
+require_contains "$REAUTH_FROM_ENV_LOG" "auth application-default set-quota-project c1-alpha-project"
+
+set +e
+REAUTH_NO_SELECTOR="$(
+  bash -lc "unset CLOUDSDK_CONFIG; PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' '${ROOT_DIR}/gcp-reauth' -y" 2>&1
+)"
+REAUTH_NO_SELECTOR_CODE=$?
+set -e
+[[ "$REAUTH_NO_SELECTOR_CODE" -eq 2 ]] || fail "expected gcp-reauth to require profile when CLOUDSDK_CONFIG is unset"
+require_contains "$REAUTH_NO_SELECTOR" "profile required when CLOUDSDK_CONFIG is not set"
+
 LOCK_BASE="${TMP_ROOT}/lock-base"
 LOCK_DIR="${LOCK_BASE}/.gcpdash.lock"
 mkdir -p "$LOCK_DIR"
@@ -270,5 +399,6 @@ set -e
 INDEX_OUT="$("${ROOT_DIR}/gcp-")"
 require_contains "$INDEX_OUT" "gcp-cp-profile"
 require_contains "$INDEX_OUT" "gcp-rm-profile"
+require_contains "$INDEX_OUT" "gcp-reauth"
 
 echo "All tests passed."

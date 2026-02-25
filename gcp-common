@@ -3,6 +3,7 @@
 GCP_COMMAND_CATALOG=(
   "gcp-|show all available gcp helper commands"
   "gcp-auth|authenticate/switch profile for current shell"
+  "gcp-reauth|refresh auth for an existing profile"
   "gcp-status|show current shell gcp context"
   "gcp-ls|list profiles"
   "gcp-cp-profile|copy a profile by number or name"

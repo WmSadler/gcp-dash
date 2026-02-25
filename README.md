@@ -56,10 +56,22 @@ Switch later without re-auth:
 source ~/bin/gcp-auth my-profile
 ```
 
+Re-auth an existing profile when needed (standalone command, not sourced):
+
+```bash
+gcp-reauth -y my-profile
+```
+
 Check current shell context:
 
 ```bash
 gcp-status
+```
+
+Verify shell/profile/token alignment (automation-friendly exit code):
+
+```bash
+gcp-status -v
 ```
 
 ## `gcp-auth` behavior
@@ -87,6 +99,27 @@ Update flow for existing profiles:
   - if ADC does not exist, runs `gcloud auth application-default login`
 - Account change (or new profile): runs one flow with `gcloud auth login --update-adc`.
 
+## `gcp-reauth` behavior
+
+- `gcp-reauth` is a regular executable and does **not** need `source`.
+- Argument order:
+  - `gcp-reauth [-y|--yes] [--no-browser|--no-broser] [profile_number_or_name] [account_email]`
+- If profile is omitted, it uses the profile from `CLOUDSDK_CONFIG` when available.
+- Re-auth flow for the selected profile:
+  - runs `gcloud auth login --update-adc`
+  - then runs `gcloud auth application-default set-quota-project <saved_project>`
+- If browser login returns a different account than expected, `gcp-reauth` fails with a mismatch error and guidance.
+- In non-interactive mode, re-auth requires `-y|--yes`.
+
+## `gcp-status --verify` behavior
+
+- `gcp-status -v` (or `--verify`) performs strict checks and exits non-zero on failure.
+- Verifies project env pins (`GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, `CLOUDSDK_CORE_PROJECT`) are set and aligned.
+- Verifies `gcloud` account/project match the active profile metadata under `CLOUDSDK_CONFIG`.
+- Verifies user token and ADC token refresh via:
+  - `gcloud auth print-access-token`
+  - `gcloud auth application-default print-access-token`
+
 ## Commands
 
 Run `gcp-` to see all GCP helper commands:
@@ -99,6 +132,7 @@ Included scripts:
 
 - `gcp-`: Show all GCP helper commands.
 - `gcp-auth`: Authenticate/switch profile for current shell (must be sourced).
+- `gcp-reauth`: Re-authenticate an existing profile (standalone command).
 - `gcp-status`: Show active shell GCP context and auth state.
 - `gcp-ls`: List profiles.
 - `gcp-cp-profile`: Copy profile by number or name to a new name.
@@ -136,6 +170,7 @@ export GCP_CFG_BASE="$PWD/.gcpdash"
 - No service account impersonation behavior is implemented in these helpers.
 - Prefer testing with a temporary `GCP_CFG_BASE` before bulk changes.
 - Non-interactive profile mutations require `-y|--yes`.
+- Non-interactive re-auth requires `-y|--yes`.
 
 Examples:
 
@@ -155,7 +190,7 @@ Run lightweight smoke tests:
 ./tests/test-gcp-helpers.sh
 ```
 
-Tests cover list/json/copy/rename flows, profile-selection behavior in `gcp-auth`, and non-interactive safety behavior.
+Tests cover list/json/copy/rename flows, profile-selection behavior in `gcp-auth`, `gcp-reauth` flows, and non-interactive safety behavior.
 
 GitHub Actions CI runs:
 

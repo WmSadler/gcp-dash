@@ -27,6 +27,7 @@ jobs:
           shellcheck -S warning \
             gcp- \
             gcp-auth \
+            gcp-reauth \
             gcp-status \
             gcp-ls \
             gcp-cp-profile \
@@ -41,6 +42,7 @@ jobs:
           bash -n \
             gcp- \
             gcp-auth \
+            gcp-reauth \
             gcp-status \
             gcp-ls \
             gcp-cp-profile \

@@ -10,6 +10,7 @@ usage() {
 Usage:
   gcp-status
   gcp-status -l|-p|--list-profiles|--profiles
+  gcp-status -v|--verify
   gcp-status -h|--help
 
 Description:
@@ -47,23 +48,175 @@ list_profiles() {
   gcp_print_profiles_numbered profiles profile_accounts profile_projects "$active_profile"
 }
 
-case "${1:-}" in
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  -l|-p|--list-profiles|--profiles)
-    list_profiles
-    exit 0
-    ;;
-  "")
-    ;;
-  *)
-    echo "Error: unknown argument: $1" >&2
-    usage
-    exit 2
-    ;;
-esac
+verify_status() {
+  local failures=0
+  local expected_project=""
+  local env_name
+  local env_value
+  local gcloud_project=""
+  local gcloud_account=""
+  local profile_project=""
+  local profile_account=""
+  local config_dir="${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}"
+
+  pass() {
+    echo "PASS: $1"
+  }
+
+  fail() {
+    echo "FAIL: $1"
+    failures=$((failures + 1))
+  }
+
+  echo "=== GCP VERIFY (this shell) ==="
+  echo "Date: $(date)"
+  echo
+  echo "Config dir: $config_dir"
+  echo
+
+  if ! command -v gcloud >/dev/null 2>&1; then
+    fail "gcloud is not available in PATH."
+    echo
+    echo "VERIFY FAILED: ${failures} issue(s)."
+    return 1
+  fi
+
+  if [[ -n "${CLOUDSDK_CONFIG:-}" ]]; then
+    pass "CLOUDSDK_CONFIG is set."
+  else
+    fail "CLOUDSDK_CONFIG is not set; run: source gcp-auth <profile>."
+  fi
+
+  for env_name in GOOGLE_CLOUD_PROJECT GCLOUD_PROJECT CLOUDSDK_CORE_PROJECT; do
+    env_value="${!env_name:-}"
+    if [[ -n "$env_value" ]]; then
+      if [[ -z "$expected_project" ]]; then
+        expected_project="$env_value"
+        pass "$env_name is set to '$env_value'."
+      elif [[ "$env_value" == "$expected_project" ]]; then
+        pass "$env_name matches expected project '$expected_project'."
+      else
+        fail "$env_name ('$env_value') does not match expected project '$expected_project'."
+      fi
+    else
+      fail "$env_name is not set."
+    fi
+  done
+
+  gcloud_project="$(gcloud config get-value project 2>/dev/null || true)"
+  [[ "$gcloud_project" == "(unset)" ]] && gcloud_project=""
+  if [[ -n "$expected_project" ]]; then
+    if [[ "$gcloud_project" == "$expected_project" ]]; then
+      pass "gcloud config project matches '$expected_project'."
+    else
+      fail "gcloud config project is '$gcloud_project' but expected '$expected_project'."
+    fi
+  fi
+
+  gcloud_account="$(gcloud config get-value account 2>/dev/null || true)"
+  [[ "$gcloud_account" == "(unset)" ]] && gcloud_account=""
+  if [[ -z "$gcloud_account" ]]; then
+    fail "gcloud config account is unset."
+  else
+    pass "gcloud config account is '$gcloud_account'."
+  fi
+
+  if [[ -n "${CLOUDSDK_CONFIG:-}" && -d "$CLOUDSDK_CONFIG" ]]; then
+    profile_project="$(gcp_profile_value "$CLOUDSDK_CONFIG" project)"
+    profile_account="$(gcp_profile_value "$CLOUDSDK_CONFIG" account)"
+    [[ "$profile_project" == "<unset>" ]] && profile_project=""
+    [[ "$profile_account" == "<unset>" ]] && profile_account=""
+
+    if [[ -n "$profile_project" ]]; then
+      if [[ -n "$expected_project" && "$profile_project" != "$expected_project" ]]; then
+        fail "saved profile project '$profile_project' does not match env project '$expected_project'."
+      else
+        pass "saved profile project matches expected project."
+      fi
+    else
+      fail "saved profile project is unset."
+    fi
+
+    if [[ -n "$profile_account" ]]; then
+      if [[ -n "$gcloud_account" && "$profile_account" == "$gcloud_account" ]]; then
+        pass "saved profile account matches gcloud account."
+      else
+        fail "saved profile account '$profile_account' does not match gcloud account '$gcloud_account'."
+      fi
+    else
+      fail "saved profile account is unset."
+    fi
+  else
+    fail "profile directory for CLOUDSDK_CONFIG was not found."
+  fi
+
+  if gcloud auth print-access-token >/dev/null 2>&1; then
+    pass "gcloud user token is alive."
+  else
+    fail "gcloud user token is stale/invalid (gcloud auth print-access-token failed)."
+  fi
+
+  if gcloud auth application-default print-access-token >/dev/null 2>&1; then
+    pass "ADC token is alive."
+  else
+    fail "ADC token is stale/invalid (application-default print-access-token failed)."
+  fi
+
+  echo
+  if [[ "$failures" -eq 0 ]]; then
+    echo "VERIFY OK: shell/profile/token state is aligned."
+    return 0
+  fi
+
+  echo "VERIFY FAILED: ${failures} issue(s)."
+  return 1
+}
+
+MODE="status"
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -l|-p|--list-profiles|--profiles)
+      if [[ "$MODE" != "status" ]]; then
+        echo "Error: only one mode flag may be used at a time." >&2
+        usage
+        exit 2
+      fi
+      MODE="list"
+      shift
+      ;;
+    -v|--verify)
+      if [[ "$MODE" != "status" ]]; then
+        echo "Error: only one mode flag may be used at a time." >&2
+        usage
+        exit 2
+      fi
+      MODE="verify"
+      shift
+      ;;
+    "")
+      shift
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$MODE" == "list" ]]; then
+  list_profiles
+  exit 0
+fi
+
+if [[ "$MODE" == "verify" ]]; then
+  verify_status
+  exit $?
+fi
 
 echo "=== GCP STATUS (this shell) ==="
 echo "Date: $(date)"

@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FILES=(gcp- gcp-auth gcp-status gcp-ls gcp-cp-profile gcp-nc gcp-rm-profile gpu-status gcp-common)
+FILES=(gcp- gcp-auth gcp-reauth gcp-status gcp-ls gcp-cp-profile gcp-nc gcp-rm-profile gpu-status gcp-common)
 
 mkdir -p "$BIN_DIR"
 

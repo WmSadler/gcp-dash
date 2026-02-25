@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./gcp-common
+source "${SCRIPT_DIR}/gcp-common"
+
+usage() {
+  cat <<USAGE
+Usage:
+  gcp-reauth [-y|--yes] [--no-browser|--no-broser] [profile_number_or_name] [account_email]
+  gcp-reauth -l|--list-profiles
+  gcp-reauth -h|--help
+
+Description:
+  Re-authenticates an existing profile without changing profile names.
+  Runs one login flow for gcloud + ADC and aligns ADC quota project.
+
+Examples:
+  gcp-reauth -y c1-stage
+  gcp-reauth -y c1-stage admin-c1@company1.com
+  CLOUDSDK_CONFIG=~/.config/gcpdash/c1-stage gcp-reauth -y
+USAGE
+  echo
+  echo "Other GCP commands:"
+  gcp_print_command_catalog "gcp-reauth"
+}
+
+list_profiles() {
+  local base_dir
+  base_dir="$(gcp_base_dir)"
+  local active_profile
+  active_profile="${CLOUDSDK_CONFIG:+$(basename "$CLOUDSDK_CONFIG")}"
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
+  declare -a profiles=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
+  declare -A profile_accounts=()
+  # shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_print_profiles_numbered
+  declare -A profile_projects=()
+
+  echo "GCP profile base: $base_dir"
+  gcp_collect_profiles "$base_dir" profiles profile_accounts profile_projects
+
+  if [[ "${#profiles[@]}" -eq 0 ]]; then
+    echo "(no profiles found)"
+    return 0
+  fi
+
+  gcp_print_profiles_numbered profiles profile_accounts profile_projects "$active_profile"
+}
+
+looks_like_email() {
+  local value="$1"
+  [[ "$value" == *"@"* && "$value" == *.* ]]
+}
+
+looks_like_project_id() {
+  local value="$1"
+  [[ "$value" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]
+}
+
+ASSUME_YES=0
+NO_BROWSER=0
+if [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]; then
+  NO_BROWSER=1
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "${1:-}" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -l|--list-profiles)
+      list_profiles
+      exit 0
+      ;;
+    -y|--yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    --no-browser|--no-broser)
+      NO_BROWSER=1
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -* )
+      echo "Error: unknown option: $1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+PROFILE_SELECTOR="${1:-}"
+ACCOUNT_EMAIL="${2:-}"
+if [[ "$#" -gt 2 ]]; then
+  echo "Error: too many positional arguments." >&2
+  usage
+  exit 2
+fi
+
+BASE_DIR="$(gcp_base_dir)"
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles / gcp_resolve_profile_selector
+declare -a PROFILES=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles
+declare -A PROFILE_ACCOUNTS=()
+# shellcheck disable=SC2034  # passed by name to gcp_collect_profiles
+declare -A PROFILE_PROJECTS=()
+# shellcheck disable=SC2034  # output holder used via nameref by gcp_resolve_profile_selector
+RESOLVED_INDEX=""
+PROFILE=""
+
+gcp_collect_profiles "$BASE_DIR" PROFILES PROFILE_ACCOUNTS PROFILE_PROJECTS
+if [[ "${#PROFILES[@]}" -eq 0 ]]; then
+  echo "Error: no profiles found in $BASE_DIR" >&2
+  exit 2
+fi
+
+if [[ -z "$PROFILE_SELECTOR" ]]; then
+  if [[ -n "${CLOUDSDK_CONFIG:-}" ]]; then
+    PROFILE_SELECTOR="$(basename "$CLOUDSDK_CONFIG")"
+  else
+    echo "Error: profile required when CLOUDSDK_CONFIG is not set." >&2
+    echo "Hint: gcp-reauth -y <profile_number_or_name> [account_email]" >&2
+    exit 2
+  fi
+fi
+
+if gcp_resolve_profile_selector PROFILES "$PROFILE_SELECTOR" PROFILE RESOLVED_INDEX; then
+  :
+elif [[ "$PROFILE_SELECTOR" =~ ^[0-9]+$ ]]; then
+  echo "Error: profile number '$PROFILE_SELECTOR' not found." >&2
+  list_profiles
+  exit 2
+else
+  echo "Error: profile '$PROFILE_SELECTOR' not found." >&2
+  list_profiles
+  exit 2
+fi
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  echo "Error: gcloud not found in PATH." >&2
+  exit 127
+fi
+
+GCP_CFG_DIR="${BASE_DIR}/${PROFILE}"
+SAVED_PROJECT="$(gcp_profile_value "$GCP_CFG_DIR" project)"
+SAVED_ACCOUNT="$(gcp_profile_value "$GCP_CFG_DIR" account)"
+[[ "$SAVED_PROJECT" == "<unset>" ]] && SAVED_PROJECT=""
+[[ "$SAVED_ACCOUNT" == "<unset>" ]] && SAVED_ACCOUNT=""
+
+if [[ -z "$SAVED_PROJECT" ]]; then
+  echo "Error: profile '$PROFILE' has no saved project." >&2
+  echo "Hint: source gcp-auth $PROFILE <project_id> [account_email]" >&2
+  exit 2
+fi
+
+if ! looks_like_project_id "$SAVED_PROJECT"; then
+  echo "Error: profile '$PROFILE' has invalid saved project '$SAVED_PROJECT'." >&2
+  exit 2
+fi
+
+EFFECTIVE_ACCOUNT="$ACCOUNT_EMAIL"
+if [[ -z "$EFFECTIVE_ACCOUNT" ]]; then
+  EFFECTIVE_ACCOUNT="$SAVED_ACCOUNT"
+fi
+
+if [[ -n "$ACCOUNT_EMAIL" ]] && ! looks_like_email "$ACCOUNT_EMAIL"; then
+  echo "Warning: account_email '$ACCOUNT_EMAIL' does not look like an email; continuing." >&2
+fi
+
+if [[ ! -t 0 && "$ASSUME_YES" -ne 1 ]]; then
+  echo "Error: non-interactive re-auth requires -y|--yes." >&2
+  exit 2
+fi
+
+echo "==> Re-auth profile: $PROFILE"
+echo "==> CLOUDSDK_CONFIG=$GCP_CFG_DIR"
+echo "==> Project: $SAVED_PROJECT"
+if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+  echo "==> Account: $EFFECTIVE_ACCOUNT"
+fi
+
+auth_refresh() {
+  umask 077
+  mkdir -p "$BASE_DIR" "$GCP_CFG_DIR"
+  chmod 700 "$BASE_DIR" "$GCP_CFG_DIR" 2>/dev/null || true
+
+  CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud --quiet config set project "$SAVED_PROJECT" >/dev/null
+  if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+    CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud --quiet config set account "$EFFECTIVE_ACCOUNT" >/dev/null || true
+  fi
+
+  if [[ "$NO_BROWSER" -eq 1 ]]; then
+    echo "==> Browser launch disabled; complete login via terminal URL/code prompts."
+  fi
+
+  echo "==> Step 1/2: gcloud auth login --update-adc"
+  local -a login_cmd=(gcloud auth login)
+  if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+    login_cmd+=(--account="$EFFECTIVE_ACCOUNT")
+  fi
+  if [[ "$NO_BROWSER" -eq 1 ]]; then
+    login_cmd+=(--no-launch-browser)
+  fi
+  login_cmd+=(--update-adc)
+  CLOUDSDK_CONFIG="$GCP_CFG_DIR" "${login_cmd[@]}"
+
+  if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
+    local active_account
+    active_account="$(CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud config get-value account 2>/dev/null || true)"
+    [[ "$active_account" == "(unset)" ]] && active_account=""
+    if [[ -n "$active_account" && "$active_account" != "$EFFECTIVE_ACCOUNT" ]]; then
+      echo "Error: login completed as '$active_account' but profile expects '$EFFECTIVE_ACCOUNT'." >&2
+      echo "Hint: choose '$EFFECTIVE_ACCOUNT' in the browser flow and retry." >&2
+      return 1
+    fi
+  fi
+
+  echo
+  echo "==> Step 2/2: gcloud auth application-default set-quota-project"
+  CLOUDSDK_CONFIG="$GCP_CFG_DIR" gcloud auth application-default set-quota-project "$SAVED_PROJECT" --quiet
+}
+
+if ! gcp_run_with_lock "$BASE_DIR" auth_refresh; then
+  exit 1
+fi
+
+echo
+echo "==> Re-auth complete for profile '$PROFILE'."
