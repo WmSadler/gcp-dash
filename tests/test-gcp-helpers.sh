@@ -208,15 +208,16 @@ EOF
 chmod +x "${FAKE_BIN}/gcloud"
 
 STATUS_VERIFY_OK="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' '${ROOT_DIR}/gcp-status' --verify" 2>&1
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' GOOGLE_APPLICATION_CREDENTIALS='${BASE_DIR}/alpha/application_default_credentials.json' '${ROOT_DIR}/gcp-status' --verify" 2>&1
 )"
 require_contains "$STATUS_VERIFY_OK" "VERIFY OK"
 require_contains "$STATUS_VERIFY_OK" "gcloud user token is alive"
 require_contains "$STATUS_VERIFY_OK" "ADC token is alive"
+require_contains "$STATUS_VERIFY_OK" "GOOGLE_APPLICATION_CREDENTIALS is pinned to the profile ADC file"
 
 set +e
 STATUS_VERIFY_PROJECT_MISMATCH="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='different-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' '${ROOT_DIR}/gcp-status' -v" 2>&1
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='different-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' GOOGLE_APPLICATION_CREDENTIALS='${BASE_DIR}/alpha/application_default_credentials.json' '${ROOT_DIR}/gcp-status' -v" 2>&1
 )"
 STATUS_VERIFY_PROJECT_MISMATCH_CODE=$?
 set -e
@@ -226,7 +227,7 @@ require_contains "$STATUS_VERIFY_PROJECT_MISMATCH" "does not match expected proj
 
 set +e
 STATUS_VERIFY_TOKEN_STALE="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' FAKE_GCLOUD_FAIL_AUTH_TOKEN=1 '${ROOT_DIR}/gcp-status' -v" 2>&1
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' CLOUDSDK_CONFIG='${BASE_DIR}/alpha' GOOGLE_CLOUD_PROJECT='c1-alpha-project' GCLOUD_PROJECT='c1-alpha-project' CLOUDSDK_CORE_PROJECT='c1-alpha-project' GOOGLE_APPLICATION_CREDENTIALS='${BASE_DIR}/alpha/application_default_credentials.json' FAKE_GCLOUD_FAIL_AUTH_TOKEN=1 '${ROOT_DIR}/gcp-status' -v" 2>&1
 )"
 STATUS_VERIFY_TOKEN_STALE_CODE=$?
 set -e
@@ -250,6 +251,7 @@ AUTH_PROJECT_ONLY_EXISTING_ADC="$(
   bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-next" 2>&1
 )"
 require_contains "$AUTH_PROJECT_ONLY_EXISTING_ADC" "==> Project: c1-alpha-next"
+require_contains "$AUTH_PROJECT_ONLY_EXISTING_ADC" "GOOGLE_APPLICATION_CREDENTIALS=${BASE_DIR}/alpha/application_default_credentials.json"
 require_contains "$AUTH_PROJECT_ONLY_EXISTING_ADC" "set-quota-project"
 PROJECT_ONLY_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
 require_contains "$PROJECT_ONLY_LOG" "config set project c1-alpha-next"
@@ -263,6 +265,7 @@ AUTH_PROJECT_ONLY_MISSING_ADC="$(
   bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' FAKE_GCLOUD_LOG='${TMP_ROOT}/gcloud.log' source '${ROOT_DIR}/gcp-auth' -y alpha c1-alpha-next2" 2>&1
 )"
 require_contains "$AUTH_PROJECT_ONLY_MISSING_ADC" "==> Project: c1-alpha-next2"
+require_contains "$AUTH_PROJECT_ONLY_MISSING_ADC" "GOOGLE_APPLICATION_CREDENTIALS=<unset>"
 require_contains "$AUTH_PROJECT_ONLY_MISSING_ADC" "application-default login"
 PROJECT_ONLY_NO_ADC_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
 require_contains "$PROJECT_ONLY_NO_ADC_LOG" "config set project c1-alpha-next2"
@@ -310,11 +313,12 @@ WSL_AUTO_LOG="$(cat "${TMP_ROOT}/gcloud.log")"
 require_contains "$WSL_AUTO_LOG" "auth login --account=wsl-auto@company1.com --no-launch-browser --update-adc"
 
 AUTH_SWITCH_BY_INDEX="$(
-  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' source '${ROOT_DIR}/gcp-auth' 3; printf 'CLOUDSDK_CONFIG=%s\n' \"\$CLOUDSDK_CONFIG\""
+  bash -lc "PATH='${FAKE_BIN}':\"\$PATH\" GCP_CFG_BASE='${BASE_DIR}' source '${ROOT_DIR}/gcp-auth' 3; printf 'CLOUDSDK_CONFIG=%s\n' \"\$CLOUDSDK_CONFIG\"; printf 'GOOGLE_APPLICATION_CREDENTIALS=%s\n' \"\$GOOGLE_APPLICATION_CREDENTIALS\""
 )"
 require_contains "$AUTH_SWITCH_BY_INDEX" "==> Using profile: bravo-renamed"
 require_contains "$AUTH_SWITCH_BY_INDEX" "Re-auth skipped"
 require_contains "$AUTH_SWITCH_BY_INDEX" "CLOUDSDK_CONFIG=${BASE_DIR}/bravo-renamed"
+require_contains "$AUTH_SWITCH_BY_INDEX" "GOOGLE_APPLICATION_CREDENTIALS=<unset>"
 
 set +e
 AUTH_BAD_INDEX="$(bash -lc "GCP_CFG_BASE='${BASE_DIR}' source '${ROOT_DIR}/gcp-auth' 99" 2>&1)"

@@ -220,6 +220,17 @@ RUN_GCLOUD_LOGIN=0
 RUN_ADC_LOGIN=0
 RUN_ADC_QUOTA_SET=0
 
+sync_generic_adc_env() {
+  local adc_path="${GCP_CFG_DIR}/application_default_credentials.json"
+  if [[ -f "${adc_path}" ]]; then
+    export GOOGLE_APPLICATION_CREDENTIALS="${adc_path}"
+    echo "==> GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS"
+  else
+    unset GOOGLE_APPLICATION_CREDENTIALS || true
+    echo "==> GOOGLE_APPLICATION_CREDENTIALS=<unset> (profile ADC missing)"
+  fi
+}
+
 if [[ "$PROFILE_EXISTS" -eq 1 ]]; then
   if [[ -z "$EFFECTIVE_PROJECT" ]]; then
     EFFECTIVE_PROJECT="$SAVED_PROJECT"
@@ -294,6 +305,7 @@ echo "==> Project: $EFFECTIVE_PROJECT"
 if [[ -n "$EFFECTIVE_ACCOUNT" ]]; then
   echo "==> Preferred account: $EFFECTIVE_ACCOUNT"
 fi
+sync_generic_adc_env
 echo
 
 if [[ "$RUN_PROFILE_MUTATION" -eq 0 ]]; then
@@ -381,6 +393,8 @@ run_auth_mutation() {
 if ! gcp_run_with_lock "$GCP_CFG_BASE" run_auth_mutation; then
   return 1 2>/dev/null || exit 1
 fi
+
+sync_generic_adc_env
 
 echo
 echo "==> Done. Current terminal is now pinned (if you sourced this)."

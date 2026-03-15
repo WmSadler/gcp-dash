@@ -98,6 +98,7 @@ Update flow for existing profiles:
   - if ADC exists for that profile, runs `gcloud auth application-default set-quota-project`
   - if ADC does not exist, runs `gcloud auth application-default login`
 - Account change (or new profile): runs one flow with `gcloud auth login --update-adc`.
+- After switching, `gcp-auth` exports `GOOGLE_APPLICATION_CREDENTIALS=$CLOUDSDK_CONFIG/application_default_credentials.json` when that profile-local ADC file exists. This keeps generic SDK clients such as Terraform aligned with the selected profile instead of falling back to `~/.config/gcloud/application_default_credentials.json`.
 
 ## `gcp-reauth` behavior
 
@@ -116,6 +117,7 @@ Update flow for existing profiles:
 - `gcp-status -v` (or `--verify`) performs strict checks and exits non-zero on failure.
 - Verifies project env pins (`GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, `CLOUDSDK_CORE_PROJECT`) are set and aligned.
 - Verifies `gcloud` account/project match the active profile metadata under `CLOUDSDK_CONFIG`.
+- When the active profile has a profile-local ADC file, verifies `GOOGLE_APPLICATION_CREDENTIALS` points at that file so generic SDK clients are aligned with the same profile.
 - Verifies user token and ADC token refresh via:
   - `gcloud auth print-access-token`
   - `gcloud auth application-default print-access-token`

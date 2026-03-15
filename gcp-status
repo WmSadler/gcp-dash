@@ -51,6 +51,7 @@ list_profiles() {
 verify_status() {
   local failures=0
   local expected_project=""
+  local expected_adc_path=""
   local env_name
   local env_value
   local gcloud_project=""
@@ -126,6 +127,7 @@ verify_status() {
     profile_account="$(gcp_profile_value "$CLOUDSDK_CONFIG" account)"
     [[ "$profile_project" == "<unset>" ]] && profile_project=""
     [[ "$profile_account" == "<unset>" ]] && profile_account=""
+    expected_adc_path="${CLOUDSDK_CONFIG}/application_default_credentials.json"
 
     if [[ -n "$profile_project" ]]; then
       if [[ -n "$expected_project" && "$profile_project" != "$expected_project" ]]; then
@@ -148,6 +150,16 @@ verify_status() {
     fi
   else
     fail "profile directory for CLOUDSDK_CONFIG was not found."
+  fi
+
+  if [[ -n "${expected_adc_path}" && -f "${expected_adc_path}" ]]; then
+    if [[ "${GOOGLE_APPLICATION_CREDENTIALS:-}" == "${expected_adc_path}" ]]; then
+      pass "GOOGLE_APPLICATION_CREDENTIALS is pinned to the profile ADC file."
+    elif [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+      fail "GOOGLE_APPLICATION_CREDENTIALS is unset; generic SDK clients may use default ADC instead of '${expected_adc_path}'."
+    else
+      fail "GOOGLE_APPLICATION_CREDENTIALS points to '${GOOGLE_APPLICATION_CREDENTIALS}' but expected '${expected_adc_path}'."
+    fi
   fi
 
   if gcloud auth print-access-token >/dev/null 2>&1; then
@@ -227,6 +239,7 @@ echo "CLOUDSDK_CONFIG=${CLOUDSDK_CONFIG:-<not set>}"
 echo "GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-<not set>}"
 echo "GCLOUD_PROJECT=${GCLOUD_PROJECT:-<not set>}"
 echo "CLOUDSDK_CORE_PROJECT=${CLOUDSDK_CORE_PROJECT:-<not set>}"
+echo "GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-<not set>}"
 echo
 
 echo "-- gcloud config --"
@@ -243,12 +256,17 @@ fi
 echo
 
 echo "-- ADC (Application Default Credentials) --"
+DEFAULT_ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
+PROFILE_ADC_PATH=""
 if [[ -n "${CLOUDSDK_CONFIG:-}" ]]; then
-  ADC_PATH="${CLOUDSDK_CONFIG}/application_default_credentials.json"
-else
-  ADC_PATH="${HOME}/.config/gcloud/application_default_credentials.json"
+  PROFILE_ADC_PATH="${CLOUDSDK_CONFIG}/application_default_credentials.json"
 fi
-echo "ADC file: $ADC_PATH"
+ADC_PATH="${GOOGLE_APPLICATION_CREDENTIALS:-$DEFAULT_ADC_PATH}"
+if [[ -n "$PROFILE_ADC_PATH" ]]; then
+  echo "Profile ADC file: $PROFILE_ADC_PATH"
+fi
+echo "Effective ADC file: $ADC_PATH"
+echo "Default ADC file : $DEFAULT_ADC_PATH"
 if [[ -f "$ADC_PATH" ]]; then
   echo "ADC exists: yes"
   ADC_MTIME="$(stat -c '%y' "$ADC_PATH" 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M:%S %z' "$ADC_PATH" 2>/dev/null || echo '<unknown>')"
